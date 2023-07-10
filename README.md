@@ -31,7 +31,7 @@ Host Bluehive_compute_dmi
     StrictHostKeyChecking no
 Host Bluehive_compute_doppelbock
 	Hostname bhg0061
-	User gliao2
+	User username
 	ProxyJump Bluehive
 	StrictHostKeyChecking no
 ```
