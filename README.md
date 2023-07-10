@@ -1,7 +1,7 @@
-# my_mac_scripts
+# my_Unix scripts
 My mac scripts, which are convenient to call using spotlight search.
 
-# Usage
+## Usage
 
 1. Put the script file in a directory, and add the directory to your PATH environment variable.
 
@@ -17,7 +17,24 @@ username
 password
 ```
 
-3. Call the script.
+3. Set the ssh config file, like:
+
+```
+Host Bluehive
+	Hostname bluehive.circ.rochester.edu
+	User username
+
+Host Bluehive_compute_dmi
+	Hostname bhc0208
+	User username
+	ProxyJump Bluehive
+    StrictHostKeyChecking no
+Host Bluehive_compute_doppelbock
+	Hostname bhg0061
+	User gliao2
+	ProxyJump Bluehive
+	StrictHostKeyChecking no
+```
 
 
 
