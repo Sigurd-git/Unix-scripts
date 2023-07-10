@@ -1,2 +1,3 @@
-source ./read_user_password.sh
+current_path="$(dirname "$0")"
+source $current_path/read_user_password.sh
 sshpass -p $PASSWORD ssh Bluehive "scontrol show node bhc0208 | grep 'CPUAlloc' | awk '{print \$1}' | awk -F'=' '{print 24-\$2}' | xargs -I {} echo 'Dmi Total Cpu: 24; Free cpu: {}. ' ; scontrol show node bhg0061 | grep 'CPUAlloc' | awk '{print \$1}' | awk -F'=' '{print 64-\$2}' | xargs -I {} echo 'Doppelbock Total Cpu: 64; Free cpu: {}. ' "

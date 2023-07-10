@@ -2,10 +2,12 @@
 #$1 is dmi or dop
 #if dmi, partition is dmi
 #if dop, partition is doppelbock
-source ./read_user_password.sh
+current_path="$(dirname "$0")"
+source $current_path/read_user_password.sh
 
 if [ "$1" = "dmi" ]
 then
+    echo /home/$USER
     code -n --remote ssh-remote+Bluehive_compute_dmi /home/$USER
 else
     code -n --remote ssh-remote+Bluehive_compute_doppelbock /home/$USER
