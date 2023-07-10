@@ -7,7 +7,6 @@ source $current_path/read_user_password.sh
 
 if [ "$1" = "dmi" ]
 then
-    echo /home/$USER
     code -n --remote ssh-remote+Bluehive_compute_dmi /home/$USER
 else
     code -n --remote ssh-remote+Bluehive_compute_doppelbock /home/$USER

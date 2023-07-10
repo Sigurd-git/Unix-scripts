@@ -1,4 +1,4 @@
-# my_Unix scripts
+# my Unix scripts
 My mac scripts, which are convenient to call using spotlight search.
 
 ## Usage
@@ -29,6 +29,7 @@ Host Bluehive_compute_dmi
 	User username
 	ProxyJump Bluehive
     StrictHostKeyChecking no
+
 Host Bluehive_compute_doppelbock
 	Hostname bhg0061
 	User username
