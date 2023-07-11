@@ -1,5 +1,5 @@
-# my Unix scripts
-My mac scripts, which are convenient to call using spotlight search.
+# my unix scripts
+My unix scripts, which are convenient to call using iterm or terminal.
 
 ## Usage
 
