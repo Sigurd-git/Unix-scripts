@@ -3,7 +3,22 @@ My mac scripts, which are convenient to call using spotlight search.
 
 ## Usage
 
-1. Put the script file in a directory, and add the directory to your PATH environment variable.
+1. Clone this repository, and add the directory to your PATH environment variable.
+
+For zsh:
+```{zsh}
+git clone https://github.com/Sigurd-git/Unix-scripts.git
+cd Unix-scripts
+echo "PATH=$PWD:$PATH">> ~/.zshrc
+source ~/.zshrc
+```
+For bash:
+```{bash}
+git clone https://github.com/Sigurd-git/Unix-scripts.git
+cd Unix-scripts
+echo "PATH=$PWD:$PATH">> ~/.bashrc
+source ~/.bashrc
+```
 
 2. Change the file mode to executable.
 ```
