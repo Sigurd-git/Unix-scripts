@@ -21,18 +21,19 @@ source ~/.bashrc
 ```
 
 2. Change the file mode to executable.
+
 ```
 chmod 755 *
 ```
 
-2. Create a file named user_password.txt in the same directory as the script file, and write your bluehive account in the first line, like:
+3. Create a file named user_password.txt in the same directory as the script file, and write your bluehive account in the first line, like:
 
 ```
 username
 password
 ```
 
-3. Set the ssh config file, like:
+4. Set the ssh config file, like:
 
 ```
 Host Bluehive
