@@ -10,4 +10,4 @@ while IFS= read -r line1; do
 done < $current_path/user_password.txt
 
 echo "USER: $USER"
-echo "PASSWORD: $PASSWORD"
+# echo "PASSWORD: $PASSWORD"

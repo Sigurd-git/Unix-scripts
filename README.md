@@ -1,4 +1,5 @@
 # my unix scripts
+
 My unix scripts, which are convenient to call using iterm or terminal.
 
 ## Usage
@@ -6,13 +7,16 @@ My unix scripts, which are convenient to call using iterm or terminal.
 1. Clone this repository, and add the directory to your PATH environment variable.
 
 For zsh:
+
 ```{zsh}
 git clone https://github.com/Sigurd-git/Unix-scripts.git
 cd Unix-scripts
 echo "PATH=$PWD:$PATH">> ~/.zshrc
 source ~/.zshrc
 ```
+
 For bash:
+
 ```{bash}
 git clone https://github.com/Sigurd-git/Unix-scripts.git
 cd Unix-scripts
@@ -36,6 +40,10 @@ password
 4. Set the ssh config file, like:
 
 ```
+Host *
+    ControlMaster auto
+    ControlPath /tmp/ssh_mux_%h_%p_%r
+
 Host Bluehive
 	Hostname bluehive.circ.rochester.edu
 	User username
@@ -52,6 +60,3 @@ Host Bluehive_compute_doppelbock
 	ProxyJump Bluehive
 	StrictHostKeyChecking no
 ```
-
-
-

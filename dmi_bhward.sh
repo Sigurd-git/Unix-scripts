@@ -5,5 +5,5 @@ if [ -z "$1" ]
 then
     set -- 32 12 32000
 fi
-sshpass -p $PASSWORD ssh Bhward "screen -dmS dmi salloc -N 1 -n $1 -p dmi -t $2:00:00 --mem $3"
+sshpass -p $PASSWORD ssh bhward "screen -dmS dmi salloc -N 1 -n $1 -p dmi -t $2:00:00 --mem $3"
 
