@@ -1,0 +1,1 @@
+nohup npc -server=98.13.62.166:38024 -vkey=ut4ue4n50framxct -type=tcp > npc_output.log 2>&1 &
