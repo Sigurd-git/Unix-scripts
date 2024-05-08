@@ -44,19 +44,10 @@ Host *
     ControlMaster auto
     ControlPath /tmp/ssh_mux_%h_%p_%r
 
-Host Bluehive
+Host bluehive
 	Hostname bluehive.circ.rochester.edu
 	User username
+	ControlMaster auto
+	ControlPath /tmp/ssh_bluehive
 
-Host Bluehive_compute_dmi
-	Hostname bhc0208
-	User username
-	ProxyJump Bluehive
-    StrictHostKeyChecking no
-
-Host Bluehive_compute_doppelbock
-	Hostname bhg0061
-	User username
-	ProxyJump Bluehive
-	StrictHostKeyChecking no
 ```
