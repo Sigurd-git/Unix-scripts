@@ -83,7 +83,7 @@ if [ -z "$NODE" ]; then
         job=\$(squeue -u $USER -O jobarrayid:18,partition:13,username:12,submittime:22,starttime:22,timeused:13,timelimit:13,numcpus:10,gres:15,minmemory:12,nodelist:10,priorityLong:9,reason:9,name:4)
         echo "\$job"
     else
-        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 ~/code tunnel --accept-server-license-terms --name $PARTITION > ~/logs/tunnel.log 2>&1 &
+        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 /scratch/snormanh_lab/shared/code_latest tunnel --accept-server-license-terms --name $PARTITION > ~/logs/tunnel.log 2>&1 &
     fi
 else
     if squeue -u $USER -O name:32|grep code; then
@@ -91,7 +91,7 @@ else
         job=\$(squeue -u $USER -O jobarrayid:18,partition:13,username:12,submittime:22,starttime:22,timeused:13,timelimit:13,numcpus:10,gres:15,minmemory:12,nodelist:10,priorityLong:9,reason:9,name:4)
         echo "\$job"
     else
-        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 -w $NODE ~/code tunnel --accept-server-license-terms --name $PARTITION > ~/logs/tunnel.log 2>&1 &
+        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 -w $NODE /scratch/snormanh_lab/shared/code_latest tunnel --accept-server-license-terms --name $PARTITION > ~/logs/tunnel.log 2>&1 &
     fi
 fi
 ENDSSH
