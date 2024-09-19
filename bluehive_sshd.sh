@@ -78,65 +78,26 @@ ssh -o StrictHostKeyChecking=no $CLUSTER <<ENDSSH
 module load gcc
 mkdir -p /home/$USER/logs
 # Your commands go here
-if [ -z "$NODE" ]; then
-    if squeue -u $USER -O name:32|grep my_sshd; then
-        echo "SSHD is already running."
-        job=\$(squeue -u $USER -O jobarrayid:18,partition:13,username:12,submittime:22,starttime:22,timeused:13,timelimit:13,numcpus:10,gres:15,minmemory:12,nodelist:10,priorityLong:9,reason:9,name:4)
-        echo "\$job"
-    else
 
-        cat <<'INNEREOF' | sbatch
+if squeue -u $USER -O name:32|grep my_sshd; then
+    echo "SSHD is already running."
+    job=\$(squeue -u $USER -O jobarrayid:18,partition:13,username:12,submittime:22,starttime:22,timeused:13,timelimit:13,numcpus:10,gres:15,minmemory:12,nodelist:10,priorityLong:9,reason:9,name:4)
+    echo "\$job"
+else
+    cat <<'INNEREOF' | sbatch
 #!/bin/bash
 #SBATCH -p $PARTITION -t $TIME:00:00
 #SBATCH -c $CPUS
-#SBATCH --mem="$MEMORY"G
+#SBATCH --mem="${MEMORY}G"
 #SBATCH --gres=gpu:$GPUS -x bhg0044,bhg0046,bhg0047,bhg0048
 #SBATCH -o /home/$USER/logs/dropbear.log
 #SBATCH --job-name=my_sshd
 
 cd /scratch/snormanh_lab/shared/dropbear
-# Find an available port
-PORT=\$(comm -23 <(seq 49152 65535 | sort) <(ss -Htan | awk '{print \$4}' | cut -d':' -f2 | sort -u) | shuf | head -n 1)
-
 # Start dropbear with the randomly selected port
-./sbin/dropbear -F -E -p \$PORT -r ./.ssh/dropbear_rsa_host_key \
--r ./.ssh/dropbear_ecdsa_host_key \
--r ./.ssh/dropbear_ed25519_host_key
+./sbin/dropbear -F -E -p 30022 -r ./.ssh/dropbear_rsa_host_key -r ./.ssh/dropbear_ecdsa_host_key -r ./.ssh/dropbear_ed25519_host_key
 
-# Output the selected port for reference
-echo "Dropbear started on port: \$PORT" >&2
 INNEREOF
 
-    fi
-else
-    if squeue -u $USER -O name:32|grep my_sshd; then
-        echo "SSHD is already running."
-        job=\$(squeue -u $USER -O jobarrayid:18,partition:13,username:12,submittime:22,starttime:22,timeused:13,timelimit:13,numcpus:10,gres:15,minmemory:12,nodelist:10,priorityLong:9,reason:9,name:4)
-        echo "\$job"
-    else
-
-        cat <<'INNEREOF' | sbatch
-#!/bin/bash
-#SBATCH -p $PARTITION -t $TIME:00:00
-#SBATCH -c $CPUS -w $NODE
-#SBATCH --mem="$MEMORY"G
-#SBATCH --gres=gpu:$GPUS -x bhg0044,bhg0046,bhg0047,bhg0048
-#SBATCH -o /home/$USER/logs/dropbear.log
-#SBATCH --job-name=my_sshd
-cd /scratch/snormanh_lab/shared/dropbear
-# Find an available port
-PORT=\$(comm -23 <(seq 49152 65535 | sort) <(ss -Htan | awk '{print \$4}' | cut -d':' -f2 | sort -u) | shuf | head -n 1)
-
-# Start dropbear with the randomly selected port
-./sbin/dropbear -F -E -p \$PORT -r ./.ssh/dropbear_rsa_host_key \
--r ./.ssh/dropbear_ecdsa_host_key \
--r ./.ssh/dropbear_ed25519_host_key
-
-# Output the selected port for reference
-echo "Dropbear started on port: \$PORT" >&2
-INNEREOF
-
-    fi
 fi
 ENDSSH
-log=$(ssh -o StrictHostKeyChecking=no $CLUSTER "tac ~/logs/dropbear.log")
