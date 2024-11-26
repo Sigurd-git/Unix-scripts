@@ -30,12 +30,5 @@ while true; do
     esac
 done
 
-echo "CLUSTER: $CLUSTER"
-running=$(ps aux | grep -c "[s]sh.*$CLUSTER")
-echo "Running: $[running-2]"
-if [ $running -gt 2 ] ; then
-  echo "SSH session to $CLUSTER is already running. Reuse."
-else
-  echo "Starting SSH session to $CLUSTER."
-  sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -fN $CLUSTER
-fi
+echo "Starting SSH session to $CLUSTER."
+sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -fN $CLUSTER

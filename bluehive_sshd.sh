@@ -71,7 +71,17 @@ echo "MEMORY: $MEMORY"
 echo "TIME: $TIME"
 echo "NODE: $NODE"
 
+# Add SSH config modification based on PARTITION
+SSH_CONFIG="$HOME/.ssh/config"
+if [ "$PARTITION" = "doppelbock" ]; then
+    sed -i '' '/^Host bluehive_compute/,/Hostname/{s/Hostname.*/Hostname bhg0061/;}' "$SSH_CONFIG"
+elif [ "$PARTITION" = "dmi" ]; then
+    sed -i '' '/^Host bluehive_compute/,/Hostname/{s/Hostname.*/Hostname bhc0208/;}' "$SSH_CONFIG"
+fi
+
 source $current_path/start_ssh_control.sh 
+
+
 
 ssh -o StrictHostKeyChecking=no $CLUSTER <<ENDSSH
 #!/bin/bash
