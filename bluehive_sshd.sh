@@ -6,7 +6,7 @@ source $current_path/read_user_password.sh
 CLUSTER=bluehive
 PARTITION=doppelbock
 CPUS=16
-GPUS=1
+GPUS=0
 MEMORY=256
 TIME=12
 
