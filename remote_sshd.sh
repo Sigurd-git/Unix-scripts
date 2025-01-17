@@ -73,12 +73,12 @@ echo "NODE: $NODE"
 # Add SSH config modification based on PARTITION
 SSH_CONFIG="$HOME/.ssh/config"
 if [ "$PARTITION" = "doppelbock" ]; then
-    sed -i '' '/^Host bluehive_compute/,/Hostname/{s/Hostname.*/Hostname bhg0061/;}' "$SSH_CONFIG"
+    sed -i '' '/^Host '$CLUSTER'_compute/,/Hostname/{s/Hostname.*/Hostname bhg0061/;}' "$SSH_CONFIG"
 elif [ "$PARTITION" = "dmi" ]; then
-    sed -i '' '/^Host bluehive_compute/,/Hostname/{s/Hostname.*/Hostname bhc0208/;}' "$SSH_CONFIG"
+    sed -i '' '/^Host '$CLUSTER'_compute/,/Hostname/{s/Hostname.*/Hostname bhc0208/;}' "$SSH_CONFIG"
 fi
 
-source $current_path/start_ssh_control.sh 
+source $current_path/start_ssh_control.sh -a $CLUSTER
 
 
 
@@ -98,7 +98,7 @@ else
 #SBATCH -p $PARTITION -t $TIME:00:00
 #SBATCH -c $CPUS
 #SBATCH --mem="${MEMORY}G"
-#SBATCH --gres=gpu:$GPUS -x bhg0044,bhg0046,bhg0047,bhg0048
+#SBATCH --gres=gpu:$GPUS
 #SBATCH -o /home/$USER/logs/dropbear.log
 #SBATCH --job-name=my_sshd
 #SBATCH --mail-type=BEGIN

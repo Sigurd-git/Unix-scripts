@@ -1,6 +1,31 @@
 current_path="$(dirname "$0")"
-source $current_path/start_ssh_control.sh 
-ssh bluehive<<ENDSSH
+
+CLUSTER=bluehive
+# Use getopt to handle command line options.
+TEMP=$(getopt -o a: --long cluster: -n 'pls.sh' -- "$@")
+if [ $? != 0 ]; then
+    echo "Terminating..." >&2
+    exit 1
+fi
+# 
+# Reordered processed command line arguments
+eval set -- "$TEMP"
+
+while true; do
+    case "$1" in
+        -a|--cluster)
+            CLUSTER=$2
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+    esac
+done
+
+source $current_path/start_ssh_control.sh -a $CLUSTER
+ssh $CLUSTER<<ENDSSH
 echo "---------------------------------"
 squeue -O jobarrayid:18,partition:13,username:12,starttime:22,timeused:13,timelimit:13,numcpus:10,minmemory:12,nodelist:10,reason:10,name | awk 'NR == 1 || /doppelbock/'
 squeue -O jobarrayid:18,partition:13,username:12,starttime:22,timeused:13,timelimit:13,numcpus:10,minmemory:12,nodelist:10,reason:10,name | awk ' /dmi/'
