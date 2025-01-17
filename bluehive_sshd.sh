@@ -19,7 +19,6 @@ fi
 # 
 # Reordered processed command line arguments
 eval set -- "$TEMP"
-eval set -- "$TEMP"
 
 # Iterate options through the case statement.
 while true; do
@@ -102,6 +101,8 @@ else
 #SBATCH --gres=gpu:$GPUS -x bhg0044,bhg0046,bhg0047,bhg0048
 #SBATCH -o /home/$USER/logs/dropbear.log
 #SBATCH --job-name=my_sshd
+#SBATCH --mail-type=BEGIN
+#SBATCH --mail-user=guoyang_liao@urmc.rochester.edu
 
 cd /scratch/snormanh_lab/shared/dropbear
 # Start dropbear with the randomly selected port

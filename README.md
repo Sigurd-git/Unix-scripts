@@ -50,4 +50,8 @@ Host bluehive
 	ControlMaster auto
 	ControlPath /tmp/ssh_bluehive
 
+Host bluehive_compute
+	Hostname bhg0061
+	User username
+	ProxyJump bluehive
 ```
