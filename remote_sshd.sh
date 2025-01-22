@@ -16,7 +16,7 @@ if [ $? != 0 ]; then
     echo "Terminating..." >&2
     exit 1
 fi
-# 
+
 # Reordered processed command line arguments
 eval set -- "$TEMP"
 
@@ -70,17 +70,16 @@ echo "MEMORY: $MEMORY"
 echo "TIME: $TIME"
 echo "NODE: $NODE"
 
-# Add SSH config modification based on PARTITION
-SSH_CONFIG="$HOME/.ssh/config"
-if [ "$PARTITION" = "doppelbock" ]; then
-    sed -i '' '/^Host '$CLUSTER'_compute/,/Hostname/{s/Hostname.*/Hostname bhg0061/;}' "$SSH_CONFIG"
-elif [ "$PARTITION" = "dmi" ]; then
-    sed -i '' '/^Host '$CLUSTER'_compute/,/Hostname/{s/Hostname.*/Hostname bhc0208/;}' "$SSH_CONFIG"
+# Only update SSH config if cluster is bluehive
+if [ "$CLUSTER" = "bluehive" ]; then
+    if [ -n "$NODE" ]; then
+        $current_path/update_ssh_config.sh -a $CLUSTER -w $NODE
+    else
+        $current_path/update_ssh_config.sh -a $CLUSTER -p $PARTITION
+    fi
 fi
 
 source $current_path/start_ssh_control.sh -a $CLUSTER
-
-
 
 ssh -o StrictHostKeyChecking=no $CLUSTER <<ENDSSH
 #!/bin/bash
