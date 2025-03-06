@@ -27,9 +27,23 @@ done
 source $current_path/start_ssh_control.sh -a $CLUSTER
 ssh $CLUSTER<<ENDSSH
 echo "---------------------------------"
-squeue -O jobarrayid:18,partition:13,username:12,starttime:22,timeused:13,timelimit:13,numcpus:10,minmemory:12,nodelist:10,reason:10,name | awk 'NR == 1 || /doppelbock/'
-squeue -O jobarrayid:18,partition:13,username:12,starttime:22,timeused:13,timelimit:13,numcpus:10,minmemory:12,nodelist:10,reason:10,name | awk ' /dmi/'
+# Get all jobs info with header and doppelbock partition jobs
+squeue -O jobarrayid:18,partition:13,username:12,timeused:13,timelimit:13,numcpus:5,gres:15,minmemory:12,nodelist:9,name:40,reason | awk 'NR == 1 || /doppelbock/'
+
+# Get dmi partition jobs without header
+squeue -O jobarrayid:18,partition:13,username:12,timeused:13,timelimit:13,numcpus:5,gres:15,minmemory:12,nodelist:9,name:40,reason | awk 'NR > 1 && /dmi/'
+
+# Get current user's jobs that are not in doppelbock or dmi partitions
+squeue -O jobarrayid:18,partition:13,username:12,timeused:13,timelimit:13,numcpus:5,gres:15,minmemory:12,nodelist:9,name:40,reason -u $USER | awk 'NR > 1 && !/doppelbock/ && !/dmi/'
 echo "---------------------------------"
-scontrol show node bhc0208 | grep 'CPUAlloc' | awk '{print \$1}' | awk -F'=' '{print 24-\$2}' | xargs -I {} echo 'Dmi Total Cpu: 24; Free cpu: {}. ' 
-scontrol show node bhg0061 | grep 'CPUAlloc' | awk '{print \$1}' | awk -F'=' '{print 64-\$2}' | xargs -I {} echo 'Doppelbock Total Cpu: 64; Free cpu: {}. ' 
+# Get free CPU count
+DMI_FREE_CPU=\$(scontrol show node bhc0208 | grep 'CPUAlloc' | awk '{print \$1}' | awk -F'=' '{print 24-\$2}')
+DOPPELBOCK_FREE_CPU=\$(scontrol show node bhg0061 | grep 'CPUAlloc' | awk '{print \$1}' | awk -F'=' '{print 64-\$2}')
+
+# Get free GPU count with error handling
+DMI_FREE_GPU=\$(squeue -w bhc0208 -O gres:15 | awk 'NR>1' | grep -o 'gpu:[0-9]*' | awk -F':' '{sum += \$2} END {print 1-sum+0}')
+DOPPELBOCK_FREE_GPU=\$(squeue -w bhg0061 -O gres:15 | awk 'NR>1' | grep -o 'gpu:[0-9]*' | awk -F':' '{sum += \$2} END {print 4-sum+0}')
+
+echo "Dmi Total Cpu: 24; Free cpu: \$DMI_FREE_CPU. Dmi Total GPU: 1; Free GPU: \$DMI_FREE_GPU."
+echo "Doppelbock Total Cpu: 64; Free cpu: \$DOPPELBOCK_FREE_CPU. Doppelbock Total GPU: 4; Free GPU: \$DOPPELBOCK_FREE_GPU."
 ENDSSH
