@@ -128,6 +128,7 @@ function find_available_port() {
 # Get an available port
 PORT=\$(find_available_port)
 echo "Using port: \$PORT"
+echo "Using Node: \$SLURM_JOB_NODELIST"
 
 # Start dropbear with the selected port
 ./sbin/dropbear -F -E -p \$PORT -r ./.ssh/dropbear_rsa_host_key -r ./.ssh/dropbear_ecdsa_host_key -r ./.ssh/dropbear_ed25519_host_key
@@ -139,7 +140,6 @@ ENDSSH
 
 # SSH into cluster and check for port in a loop
 PORT=$(ssh -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH2
-echo "Waiting for port allocation..." > /home/$USER/logs/dropbear_test.log
 while true; do
     # Get SSH port from the job if it's running
     PORT_INFO=\$(grep 'Using port:' /home/$USER/logs/dropbear.log 2>/dev/null | tail -1)
@@ -154,14 +154,23 @@ while true; do
 done
 ENDSSH2
 )
+NODE=$(ssh -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH2
+echo "Waiting for port allocation..." > /home/$USER/logs/dropbear_test.log
+while true; do
+    # Get SSH port from the job if it's running
+    NODE_INFO=\$(grep 'Using Node:' /home/$USER/logs/dropbear.log 2>/dev/null | tail -1)
+    NODE=\$(echo \$NODE_INFO | awk '{print \$3}')
+    
+    # Break the loop if a valid port (greater than 0) is found
+    if [ -n "\$NODE" ]; then
+        echo \$NODE
+        break
+    fi
+    sleep 1
+done
+ENDSSH2
+)
 
 echo "Detected port: $PORT"
-
-# Only update SSH config if cluster is bluehive
-if [ "$CLUSTER" = "bluehive" ]; then
-    if [ -n "$NODE" ]; then
-        $current_path/update_ssh_config.sh -a $CLUSTER -w $NODE -o $PORT
-    else
-        $current_path/update_ssh_config.sh -a $CLUSTER -p $PARTITION -o $PORT
-    fi
-fi
+echo "Detected node: $NODE"
+$current_path/update_ssh_config.sh -a $CLUSTER -p $PARTITION -o $PORT -w $NODE
