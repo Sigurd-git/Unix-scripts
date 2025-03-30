@@ -78,12 +78,7 @@ module load gcc
 mkdir -p /home/$USER/logs
 # Your commands go here
 rm -rf /home/$USER/logs/dropbear.log
-if squeue -u $USER -O name:32|grep my_sshd; then
-    echo "SSHD is already running."
-    job=\$(squeue -u $USER -O jobarrayid:18,partition:13,username:12,submittime:22,starttime:22,timeused:13,timelimit:13,numcpus:10,gres:15,minmemory:12,nodelist:10,priorityLong:9,reason:9,name:4)
-    echo "\$job"
-else
-    cat <<'INNEREOF' | sbatch
+cat <<'INNEREOF' | sbatch
 #!/bin/bash
 #SBATCH -p $PARTITION -t $TIME:00:00
 #SBATCH -c $CPUS
@@ -134,8 +129,6 @@ echo "Using Node: \$SLURM_JOB_NODELIST"
 ./sbin/dropbear -F -E -p \$PORT -r ./.ssh/dropbear_rsa_host_key -r ./.ssh/dropbear_ecdsa_host_key -r ./.ssh/dropbear_ed25519_host_key
 
 INNEREOF
-
-fi
 ENDSSH
 
 # SSH into cluster and check for port in a loop
