@@ -1,6 +1,6 @@
 #!/bin/bash
 current_path="$(dirname "$0")"
-
+source $current_path/read_user.sh
 CLUSTER_DEFAULT=bluehive
 CLUSTER=$CLUSTER_DEFAULT  # Set the default value here, it can be bluehive or bhward
 
