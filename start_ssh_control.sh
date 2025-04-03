@@ -31,4 +31,4 @@ while true; do
 done
 
 echo "Starting SSH session to $CLUSTER."
-sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -fN $CLUSTER
+ssh -o StrictHostKeyChecking=no -fN $CLUSTER
