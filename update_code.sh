@@ -14,12 +14,16 @@ echo "Updating Cursor Server to version $version..."
 # Execute commands on remote server
 ssh bluehive<<ENDSSH
 cd "$INSTALL_DIR"
-rm -rf cli-alpine-x64.tar.gz
-rm -rf cursor-${commit}
-curl -L "$DOWNLOAD_URL" -o "cli-alpine-x64.tar.gz"
-tar -xzf "cli-alpine-x64.tar.gz"
-mv cursor cursor-${commit}
-rm "cli-alpine-x64.tar.gz"
-echo "Cursor Server updated successfully in $INSTALL_DIR/cursor-${commit}!"
+# Check if the version already exists
+if [ -d "cursor-${commit}" ]; then
+    echo "Cursor Server version ${commit} already exists in $INSTALL_DIR/cursor-${commit}!"
+else
+    # Download and install the new version
+    curl -L "$DOWNLOAD_URL" -o "cli-alpine-x64.tar.gz"
+    tar -xzf "cli-alpine-x64.tar.gz"
+    mv cursor cursor-${commit}
+    rm "cli-alpine-x64.tar.gz"
+    echo "Cursor Server updated successfully in $INSTALL_DIR/cursor-${commit}!"
+fi
 
 ENDSSH

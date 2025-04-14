@@ -76,33 +76,35 @@ source $current_path/start_ssh_control.sh
 ssh -o StrictHostKeyChecking=no $CLUSTER <<ENDSSH
 #!/bin/bash
 module load gcc
+mkdir -p /home/$USER/logs
 # Your commands go here
 if [ -z "$NODE" ]; then
-    if squeue -u $USER -O name:32|grep code; then
+    if squeue -u $USER -O name:32|grep cursor; then
         echo "Tunnel is already running."
         job=\$(squeue -u $USER -O jobarrayid:18,partition:13,username:12,submittime:22,starttime:22,timeused:13,timelimit:13,numcpus:10,gres:15,minmemory:12,nodelist:10,priorityLong:9,reason:9,name:4)
         echo "\$job"
     else
-        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 /scratch/snormanh_lab/shared/code_latest tunnel --accept-server-license-terms --name $PARTITION > ~/logs/tunnel.log 2>&1 &
+        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 /scratch/snormanh_lab/shared/cursor tunnel --accept-server-license-terms --name ${CLUSTER}_compute > ~/logs/tunnel.log 2>&1 &
     fi
 else
-    if squeue -u $USER -O name:32|grep code; then
+    if squeue -u $USER -O name:32|grep cursor; then
         echo "Tunnel is already running."
         job=\$(squeue -u $USER -O jobarrayid:18,partition:13,username:12,submittime:22,starttime:22,timeused:13,timelimit:13,numcpus:10,gres:15,minmemory:12,nodelist:10,priorityLong:9,reason:9,name:4)
         echo "\$job"
     else
-        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 -w $NODE /scratch/snormanh_lab/shared/code_latest tunnel --accept-server-license-terms --name $PARTITION > ~/logs/tunnel.log 2>&1 &
+        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 -w $NODE /scratch/snormanh_lab/shared/cursor tunnel --accept-server-license-terms --name ${CLUSTER}_compute > ~/logs/tunnel.log 2>&1 &
     fi
 fi
 ENDSSH
-log=$(ssh -o StrictHostKeyChecking=no $CLUSTER "tac ~/logs/tunnel.log")
-token=$(echo $log | grep -o 'use code \S\{9\}' | head -n 1 | cut -d ' ' -f 3)
-if [ -z "$token" ]; then
-    echo "Logs: $log"
-else
-    open "https://github.com/login/device"
-    platform=$(uname -s)
+# log=$(ssh -o StrictHostKeyChecking=no $CLUSTER "cat ~/logs/tunnel.log")
+# echo "Waiting for tunnel to start..."
+# token=$(echo $log | grep -o 'use code \S\{9\}' | head -n 1 | cut -d ' ' -f 3)
+# if [ -z "$token" ]; then
+#     echo "Logs: $log"
+# else
+#     open "https://github.com/login/device"
+#     platform=$(uname -s)
 
-    echo "Token: $token"
+#     echo "Token: $token"
     
-fi
+# fi
