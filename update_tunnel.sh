@@ -22,7 +22,7 @@ else
     # Download and install the new version
     curl -L "$DOWNLOAD_URL" -o "vscode-reh-linux-x64.tar.gz"
     mkdir -p Stable-${commit}
-    srun -p interactive -c 8 -t 00:10:00 tar -xzf "vscode-reh-linux-x64.tar.gz" -C Stable-${commit} --strip-components=1
+    srun -p doppelbock -c 8 -t 00:10:00 tar -xzf "vscode-reh-linux-x64.tar.gz" -C Stable-${commit} --strip-components=1
     rm "vscode-reh-linux-x64.tar.gz"
     echo "Cursor Server updated successfully in $INSTALL_DIR/cursor-${commit}!"
 fi
