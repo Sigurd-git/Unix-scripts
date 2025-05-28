@@ -44,6 +44,18 @@ DOPPELBOCK_FREE_CPU=\$(scontrol show node bhg0061 | grep 'CPUAlloc' | awk '{prin
 DMI_FREE_GPU=\$(squeue -w bhc0208 -O gres:15 | awk 'NR>1' | grep -o 'gpu:[0-9]*' | awk -F':' '{sum += \$2} END {print 1-sum+0}')
 DOPPELBOCK_FREE_GPU=\$(squeue -w bhg0061 -O gres:15 | awk 'NR>1' | grep -o 'gpu:[0-9]*' | awk -F':' '{sum += \$2} END {print 4-sum+0}')
 
-echo "Dmi Total Cpu: 24; Free cpu: \$DMI_FREE_CPU. Dmi Total GPU: 1; Free GPU: \$DMI_FREE_GPU."
-echo "Doppelbock Total Cpu: 64; Free cpu: \$DOPPELBOCK_FREE_CPU. Doppelbock Total GPU: 4; Free GPU: \$DOPPELBOCK_FREE_GPU."
+# Get memory info for DMI node
+DMI_TOTAL_MEMORY=\$(scontrol show node bhc0208 | grep -o 'RealMemory=[0-9]*' | cut -d'=' -f2)
+DMI_ALLOC_MEMORY=\$(scontrol show node bhc0208 | grep -o 'AllocMem=[0-9]*' | cut -d'=' -f2)
+DMI_TOTAL_MEMORY_GB=\$(((\${DMI_TOTAL_MEMORY:-0}+512)/1024))
+DMI_FREE_MEMORY_GB=\$(((\${DMI_TOTAL_MEMORY:-0}-\${DMI_ALLOC_MEMORY:-0}+512)/1024))
+
+# Get memory info for DOPPELBOCK node
+DOPPELBOCK_TOTAL_MEMORY=\$(scontrol show node bhg0061 | grep -o 'RealMemory=[0-9]*' | cut -d'=' -f2)
+DOPPELBOCK_ALLOC_MEMORY=\$(scontrol show node bhg0061 | grep -o 'AllocMem=[0-9]*' | cut -d'=' -f2)
+DOPPELBOCK_TOTAL_MEMORY_GB=\$(((\${DOPPELBOCK_TOTAL_MEMORY:-0}+512)/1024))
+DOPPELBOCK_FREE_MEMORY_GB=\$(((\${DOPPELBOCK_TOTAL_MEMORY:-0}-\${DOPPELBOCK_ALLOC_MEMORY:-0}+512)/1024))
+
+echo "Dmi Total Cpu: 24; Free cpu: \$DMI_FREE_CPU. Dmi Total GPU: 1; Free GPU: \$DMI_FREE_GPU. Total Memory: \$DMI_TOTAL_MEMORY_GB GB; Free Memory: \$DMI_FREE_MEMORY_GB GB."
+echo "Doppelbock Total Cpu: 64; Free cpu: \$DOPPELBOCK_FREE_CPU. Doppelbock Total GPU: 4; Free GPU: \$DOPPELBOCK_FREE_GPU. Total Memory: \$DOPPELBOCK_TOTAL_MEMORY_GB GB; Free Memory: \$DOPPELBOCK_FREE_MEMORY_GB GB."
 ENDSSH
