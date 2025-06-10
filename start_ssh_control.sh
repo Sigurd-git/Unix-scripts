@@ -41,5 +41,11 @@ else
     echo "Error: Unknown cluster '$CLUSTER'. Supported clusters: bluehive, bhward"
     exit 1
 fi
-
-$current_path/sshpass_mac_arm64 -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -fN $USER@$HOSTNAME
+# Detect OS and use appropriate sshpass binary
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    $current_path/sshpass_mac_arm64 -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -fN $USER@$HOSTNAME
+else
+    # Linux
+    $current_path/sshpass_linux_amd64 -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -fN $USER@$HOSTNAME
+fi
