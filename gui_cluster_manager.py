@@ -633,9 +633,17 @@ class MainPage:
         main_frame = tk.Frame(self.root, bg=Colors.BG_LIGHT)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=30)
 
+        # Create top container for header and controls (50% of height)
+        top_container = tk.Frame(main_frame, bg=Colors.BG_LIGHT)
+        top_container.pack(fill=tk.BOTH, expand=True)
+
+        # Create bottom container for terminal output (50% of height)
+        bottom_container = tk.Frame(main_frame, bg=Colors.BG_LIGHT)
+        bottom_container.pack(fill=tk.BOTH, expand=True)
+
         # Header with connection info and logout
-        header_frame = tk.Frame(main_frame, bg=Colors.BG_LIGHT)
-        header_frame.pack(fill=tk.X, pady=(0, 25))
+        header_frame = tk.Frame(top_container, bg=Colors.BG_LIGHT)
+        header_frame.pack(fill=tk.X, pady=(0, 15))
 
         # Title section with modern styling
         title_section = tk.Frame(header_frame, bg=Colors.BG_LIGHT)
@@ -676,8 +684,8 @@ class MainPage:
         logout_btn.pack(side=tk.RIGHT)
 
         # Info section
-        info_section = tk.Frame(main_frame, bg=Colors.BG_LIGHT)
-        info_section.pack(fill=tk.X, pady=(0, 20))
+        info_section = tk.Frame(top_container, bg=Colors.BG_LIGHT)
+        info_section.pack(fill=tk.X, pady=(0, 15))
 
         info_label = ttk.Label(
             info_section,
@@ -688,21 +696,21 @@ class MainPage:
         info_label.pack()
 
         # Connection Parameters Section
-        self.create_params_section(main_frame)
+        self.create_params_section(top_container)
 
         # Separator
-        separator2 = ttk.Separator(main_frame, orient="horizontal")
-        separator2.pack(fill=tk.X, pady=20)
+        separator2 = ttk.Separator(top_container, orient="horizontal")
+        separator2.pack(fill=tk.X, pady=10)
 
         # Action Buttons Section
-        self.create_buttons_section(main_frame)
+        self.create_buttons_section(top_container)
 
         # Separator
         separator3 = ttk.Separator(main_frame, orient="horizontal")
-        separator3.pack(fill=tk.X, pady=20)
+        separator3.pack(fill=tk.X, pady=10)
 
-        # Output Display Section
-        self.create_output_section(main_frame)
+        # Output Display Section (takes bottom container = 50% of height)
+        self.create_output_section(bottom_container)
 
     def create_params_section(self, parent):
         """Create connection parameters configuration widgets."""
@@ -710,9 +718,9 @@ class MainPage:
             parent,
             text="  ⚙️ Connection Parameters  ",
             style="MainCard.TLabelframe",
-            padding=25,
+            padding=15,
         )
-        params_frame.pack(fill=tk.X, pady=(0, 10))
+        params_frame.pack(fill=tk.X, pady=(0, 8))
 
         # Initialize parameter variables with default values
         for key, default_value in self.default_params.items():
@@ -730,11 +738,11 @@ class MainPage:
 
         # Cluster info (read-only, showing current connection)
         ttk.Label(params_frame, text="🖥️ Cluster:", style="Body.TLabel").grid(
-            row=row, column=0, sticky=tk.W, pady=8, padx=(0, 15)
+            row=row, column=0, sticky=tk.W, pady=6, padx=(0, 15)
         )
 
         cluster_info_frame = tk.Frame(params_frame, bg=Colors.BG_CARD)
-        cluster_info_frame.grid(row=row, column=1, sticky=tk.W, pady=8, padx=(0, 30))
+        cluster_info_frame.grid(row=row, column=1, sticky=tk.W, pady=6, padx=(0, 30))
 
         cluster_label = tk.Label(
             cluster_info_frame,
@@ -749,7 +757,7 @@ class MainPage:
 
         # Partition
         ttk.Label(params_frame, text="📦 Partition:", style="Body.TLabel").grid(
-            row=row, column=2, sticky=tk.W, pady=8, padx=(0, 15)
+            row=row, column=2, sticky=tk.W, pady=6, padx=(0, 15)
         )
 
         ttk.Entry(
@@ -757,13 +765,13 @@ class MainPage:
             textvariable=self.param_vars["partition"],
             style="MainEntry.TEntry",
             width=18,
-        ).grid(row=row, column=3, sticky=tk.EW, pady=8)
+        ).grid(row=row, column=3, sticky=tk.EW, pady=6)
 
         row += 1
 
         # CPUs
         ttk.Label(params_frame, text="⚡ CPUs:", style="Body.TLabel").grid(
-            row=row, column=0, sticky=tk.W, pady=8, padx=(0, 15)
+            row=row, column=0, sticky=tk.W, pady=6, padx=(0, 15)
         )
 
         ttk.Entry(
@@ -771,11 +779,11 @@ class MainPage:
             textvariable=self.param_vars["cpus"],
             style="MainEntry.TEntry",
             width=18,
-        ).grid(row=row, column=1, sticky=tk.EW, pady=8, padx=(0, 30))
+        ).grid(row=row, column=1, sticky=tk.EW, pady=6, padx=(0, 30))
 
         # GPUs
         ttk.Label(params_frame, text="🎯 GPUs:", style="Body.TLabel").grid(
-            row=row, column=2, sticky=tk.W, pady=8, padx=(0, 15)
+            row=row, column=2, sticky=tk.W, pady=6, padx=(0, 15)
         )
 
         ttk.Entry(
@@ -783,13 +791,13 @@ class MainPage:
             textvariable=self.param_vars["gpus"],
             style="MainEntry.TEntry",
             width=18,
-        ).grid(row=row, column=3, sticky=tk.EW, pady=8)
+        ).grid(row=row, column=3, sticky=tk.EW, pady=6)
 
         row += 1
 
         # Memory
         ttk.Label(params_frame, text="💾 Memory (GB):", style="Body.TLabel").grid(
-            row=row, column=0, sticky=tk.W, pady=8, padx=(0, 15)
+            row=row, column=0, sticky=tk.W, pady=6, padx=(0, 15)
         )
 
         ttk.Entry(
@@ -797,11 +805,11 @@ class MainPage:
             textvariable=self.param_vars["memory"],
             style="MainEntry.TEntry",
             width=18,
-        ).grid(row=row, column=1, sticky=tk.EW, pady=8, padx=(0, 30))
+        ).grid(row=row, column=1, sticky=tk.EW, pady=6, padx=(0, 30))
 
         # Time
         ttk.Label(params_frame, text="⏰ Time (hours):", style="Body.TLabel").grid(
-            row=row, column=2, sticky=tk.W, pady=8, padx=(0, 15)
+            row=row, column=2, sticky=tk.W, pady=6, padx=(0, 15)
         )
 
         ttk.Entry(
@@ -809,13 +817,13 @@ class MainPage:
             textvariable=self.param_vars["time"],
             style="MainEntry.TEntry",
             width=18,
-        ).grid(row=row, column=3, sticky=tk.EW, pady=8)
+        ).grid(row=row, column=3, sticky=tk.EW, pady=6)
 
         row += 1
 
         # Node (optional)
         ttk.Label(params_frame, text="🎯 Node (optional):", style="Body.TLabel").grid(
-            row=row, column=0, sticky=tk.W, pady=8, padx=(0, 15)
+            row=row, column=0, sticky=tk.W, pady=6, padx=(0, 15)
         )
 
         ttk.Entry(
@@ -823,12 +831,12 @@ class MainPage:
             textvariable=self.param_vars["node"],
             style="MainEntry.TEntry",
             width=18,
-        ).grid(row=row, column=1, sticky=tk.EW, pady=8, padx=(0, 30))
+        ).grid(row=row, column=1, sticky=tk.EW, pady=6, padx=(0, 30))
 
         # No Log checkbox with modern styling
         checkbox_frame = tk.Frame(params_frame, bg=Colors.BG_CARD)
         checkbox_frame.grid(
-            row=row, column=2, columnspan=2, sticky=tk.W, pady=8, padx=(0, 15)
+            row=row, column=2, columnspan=2, sticky=tk.W, pady=6, padx=(0, 15)
         )
 
         ttk.Checkbutton(
@@ -840,7 +848,7 @@ class MainPage:
     def create_buttons_section(self, parent):
         """Create action buttons section."""
         button_frame = tk.Frame(parent, bg=Colors.BG_LIGHT)
-        button_frame.pack(fill=tk.X, pady=15)
+        button_frame.pack(fill=tk.X, pady=8)
 
         # Left side buttons container
         left_buttons = tk.Frame(button_frame, bg=Colors.BG_LIGHT)
@@ -888,7 +896,7 @@ class MainPage:
 
         # Status section
         status_frame = tk.Frame(parent, bg=Colors.BG_LIGHT)
-        status_frame.pack(fill=tk.X, pady=(10, 0))
+        status_frame.pack(fill=tk.X, pady=(5, 0))
 
         self.status_label = ttk.Label(
             status_frame, text="✅ Ready", style="MainStatus.TLabel"
@@ -902,13 +910,13 @@ class MainPage:
             parent,
             text="  📊 Script Execution Output  ",
             style="MainCard.TLabelframe",
-            padding=20,
+            padding=10,
         )
-        output_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        output_frame.pack(fill=tk.BOTH, expand=True)
 
         # Output control header
         control_frame = tk.Frame(output_frame, bg=Colors.BG_CARD)
-        control_frame.pack(fill=tk.X, pady=(0, 15))
+        control_frame.pack(fill=tk.X, pady=(0, 8))
 
         # Left side controls
         left_controls = tk.Frame(control_frame, bg=Colors.BG_CARD)
@@ -948,7 +956,6 @@ class MainPage:
         self.output_text = tk.Text(
             text_container,
             wrap=tk.WORD,
-            height=15,
             font=Fonts.MONOSPACE,
             bg="#1E1E1E",  # Dark terminal background
             fg="#D4D4D4",  # Light gray text
