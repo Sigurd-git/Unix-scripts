@@ -1,6 +1,5 @@
 #!/bin/zsh
 current_path="$(dirname "$0")"
-source $current_path/read_user_password.sh
 
 # Set default value.
 CLUSTER=bluehive

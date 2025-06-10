@@ -1,0 +1,14 @@
+[project]
+name = "cluster-manager-gui"
+version = "1.0.0"
+description = "GUI for managing cluster connections and tunnel scripts"
+authors = [
+    {name = "User", email = "user@example.com"},
+]
+dependencies = [
+    "paramiko>=2.0",
+]
+requires-python = ">=3.8"
+
+[tool.uv]
+dev-dependencies = [] 

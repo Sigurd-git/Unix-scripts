@@ -31,4 +31,15 @@ while true; do
 done
 
 echo "Starting SSH session to $CLUSTER."
-sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -fN $CLUSTER
+
+# Set HOSTNAME based on CLUSTER
+if [ "$CLUSTER" = "bluehive" ]; then
+    HOSTNAME="bluehive.circ.rochester.edu"
+elif [ "$CLUSTER" = "bhward" ]; then
+    HOSTNAME="bhward.circ.rochester.edu"
+else
+    echo "Error: Unknown cluster '$CLUSTER'. Supported clusters: bluehive, bhward"
+    exit 1
+fi
+
+$current_path/sshpass_mac_arm64 -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -fN $USER@$HOSTNAME

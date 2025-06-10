@@ -5,3 +5,5 @@ vsc_samlab_sigurd.sh
 vsc_samlab_sigurd_workspace.sh
 mine.sh
 .vscode
+.venv/
+**/__pycache__/
