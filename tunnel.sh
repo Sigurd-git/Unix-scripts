@@ -89,7 +89,7 @@ echo "HOSTNAME: $HOSTNAME"
 
 source $current_path/start_ssh_control.sh 
 
-ssh -o StrictHostKeyChecking=no $USER@$HOSTNAME <<ENDSSH
+ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no $USER@$HOSTNAME <<ENDSSH
 #!/bin/bash
 module load gcc
 mkdir -p /home/$USER/logs

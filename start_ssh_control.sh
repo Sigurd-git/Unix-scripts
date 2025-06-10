@@ -43,9 +43,9 @@ else
 fi
 # Detect OS and use appropriate sshpass binary
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS
-    $current_path/sshpass_mac_arm64 -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -fN $USER@$HOSTNAME
+    # macOS - Use SSH control master configuration
+    $current_path/sshpass_mac_arm64 -p "$PASSWORD" ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -fN $USER@$HOSTNAME
 else
     # Linux
-    $current_path/sshpass_linux_amd64 -p "$PASSWORD" ssh -o StrictHostKeyChecking=no -fN $USER@$HOSTNAME
+    $current_path/sshpass_linux_amd64 -p "$PASSWORD" ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -fN $USER@$HOSTNAME
 fi

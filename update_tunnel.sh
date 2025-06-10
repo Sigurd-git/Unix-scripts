@@ -14,7 +14,7 @@ DOWNLOAD_URL="https://cursor.blob.core.windows.net/remote-releases/${version}-${
 echo "Updating Cursor Server to version $version..."
 
 # Execute commands on remote server
-ssh $USER@$HOSTNAME<<ENDSSH
+ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no $USER@$HOSTNAME<<ENDSSH
 cd "$INSTALL_DIR"
 # Check if the version already exists
 if [ -d "cursor-${commit}" ]; then
@@ -24,7 +24,7 @@ else
     echo "Downloading Cursor Server from $DOWNLOAD_URL..."
     wget --progress=bar:force "$DOWNLOAD_URL" -O "vscode-reh-linux-x64.tar.gz"
     mkdir -p Stable-${commit}
-    srun -p doppelbock -c 8 -t 00:10:00 tar -xzf "vscode-reh-linux-x64.tar.gz" -C Stable-${commit} --strip-components=1
+    srun -p doppelbock -c 4 -t 00:10:00 tar -xzf "vscode-reh-linux-x64.tar.gz" -C Stable-${commit} --strip-components=1
     rm "vscode-reh-linux-x64.tar.gz"
     echo "Cursor Server updated successfully in $INSTALL_DIR/cursor-${commit}!"
 fi

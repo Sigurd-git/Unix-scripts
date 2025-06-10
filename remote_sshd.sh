@@ -71,7 +71,7 @@ echo "NODE: $NODE"
 
 source $current_path/start_ssh_control.sh -a $CLUSTER
 
-ssh -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH
+ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH
 #!/bin/bash
 module load gcc
 mkdir -p /home/$USER/logs
@@ -138,7 +138,7 @@ fi
 ENDSSH
 
 # SSH into cluster and check for port in a loop
-PORT=$(ssh -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH2
+PORT=$(ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH2
 while true; do
     # Get SSH port from the job if it's running
     PORT_INFO=\$(grep 'Using port:' /home/$USER/logs/dropbear.log 2>/dev/null | tail -1)
@@ -153,7 +153,7 @@ while true; do
 done
 ENDSSH2
 )
-NODE=$(ssh -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH2
+NODE=$(ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH2
 echo "Waiting for port allocation..." > /home/$USER/logs/dropbear_test.log
 while true; do
     # Get SSH port from the job if it's running

@@ -406,24 +406,12 @@ class LoginPage:
         try:
             # Get hostname based on cluster
             cluster = self.cluster_var.get()
-            if cluster == "bluehive":
-                hostname = "bluehive.circ.rochester.edu"
-            elif cluster == "bhward":
-                hostname = "bhward.circ.rochester.edu"
-            else:
-                raise ValueError(f"Unknown cluster: {cluster}")
 
             # Test SSH connection with a simple command
             test_cmd = [
-                "sshpass",
-                "-p",
-                self.password_var.get(),
-                "ssh",
-                "-o",
-                "ConnectTimeout=10",
-                "-o",
-                "StrictHostKeyChecking=no",
-                f"{self.user_var.get()}@{hostname}",
+                "./start_ssh_control.sh",
+                "-a",
+                cluster,
                 "echo 'Connection test successful'",
             ]
 

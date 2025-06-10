@@ -39,7 +39,7 @@ echo "CLUSTER: $CLUSTER"
 echo "HOSTNAME: $HOSTNAME"
 
 source $current_path/start_ssh_control.sh -a $CLUSTER
-ssh $USER@$HOSTNAME<<ENDSSH
+ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no $USER@$HOSTNAME<<ENDSSH
 echo
 echo "=================================== CLUSTER STATUS ==================================="
 echo

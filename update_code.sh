@@ -21,7 +21,7 @@ fi
 echo "Updating Cursor Server to version $version..."
 
 # Execute commands on remote server
-ssh $USER@$HOSTNAME<<ENDSSH
+ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no $USER@$HOSTNAME<<ENDSSH
 cd "$INSTALL_DIR"
 # Check if the version already exists
 if [ -d "cursor-${commit}" ]; then
