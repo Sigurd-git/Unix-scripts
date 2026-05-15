@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 
 # Default values
 CLUSTER="bluehive"

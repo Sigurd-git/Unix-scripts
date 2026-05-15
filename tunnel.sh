@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 current_path="$(dirname "$0")"
 
 # Set default value.
@@ -101,7 +101,7 @@ if [ -z "$NODE" ]; then
         echo "\$job"
     else
         echo "Starting tunnel..." > ~/logs/tunnel.log
-        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 /scratch/snormanh_lab/shared/cursor tunnel --accept-server-license-terms --name ${CLUSTER}_compute > ~/logs/tunnel.log 2>&1 &
+        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 /scratch/snormanh_lab/shared/cursor tunnel --accept-server-license-terms --verbose --name ${CLUSTER}C > ~/logs/tunnel.log 2>&1 &
     fi
 else
     if squeue -u $USER -O name:32|grep cursor; then
@@ -110,7 +110,7 @@ else
         echo "\$job"
     else
         echo "Starting tunnel..." > ~/logs/tunnel.log
-        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 -w $NODE /scratch/snormanh_lab/shared/cursor tunnel --accept-server-license-terms --name ${CLUSTER}_compute > ~/logs/tunnel.log 2>&1 &
+        nohup srun -N 1 --ntasks-per-node=$CPUS -p $PARTITION --mem="$MEMORY"g --gres=gpu:$GPUS -t $TIME:00:00 -w $NODE /scratch/snormanh_lab/shared/cursor tunnel --accept-server-license-terms --verbose --name ${CLUSTER}C > ~/logs/tunnel.log 2>&1 &
     fi
 fi
 if [ "$NO_LOG" = "false" ]; then

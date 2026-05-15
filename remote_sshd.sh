@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 current_path="$(dirname "$0")"
 
 # Set default value.
@@ -68,10 +68,18 @@ echo "GPUS: $GPUS"
 echo "MEMORY: $MEMORY"
 echo "TIME: $TIME"
 echo "NODE: $NODE"
+# Set HOSTNAME based on CLUSTER
+if [ "$CLUSTER" = "bluehive" ]; then
+    HOSTNAME="bluehive.circ.rochester.edu"
+elif [ "$CLUSTER" = "bhward" ]; then
+    HOSTNAME="bhward.circ.rochester.edu"
+else
+    echo "Error: Unknown cluster '$CLUSTER'. Supported clusters: bluehive, bhward"
+    exit 1
+fi
+source $current_path/start_ssh_control.sh -a $USER@$HOSTNAME
 
-source $current_path/start_ssh_control.sh -a $CLUSTER
-
-ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH
+ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $USER@$HOSTNAME <<ENDSSH
 #!/bin/bash
 module load gcc
 mkdir -p /home/$USER/logs
@@ -138,7 +146,7 @@ fi
 ENDSSH
 
 # SSH into cluster and check for port in a loop
-PORT=$(ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH2
+PORT=$(ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $USER@$HOSTNAME <<ENDSSH2
 while true; do
     # Get SSH port from the job if it's running
     PORT_INFO=\$(grep 'Using port:' /home/$USER/logs/dropbear.log 2>/dev/null | tail -1)
@@ -153,7 +161,7 @@ while true; do
 done
 ENDSSH2
 )
-NODE=$(ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $CLUSTER <<ENDSSH2
+NODE=$(ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $USER@$HOSTNAME <<ENDSSH2
 echo "Waiting for port allocation..." > /home/$USER/logs/dropbear_test.log
 while true; do
     # Get SSH port from the job if it's running
