@@ -7,3 +7,4 @@ mine.sh
 .vscode
 .venv/
 **/__pycache__/
+cli-alpine-x64.tar.gz
