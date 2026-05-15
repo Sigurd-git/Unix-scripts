@@ -28,7 +28,7 @@ if [ -d "cursor-${commit}" ]; then
     echo "Cursor Server version ${commit} already exists in $INSTALL_DIR/cursor-${commit}!"
 else
     # Download and install the new version
-    curl -L -o "cli-alpine-x64.tar.gz" "$DOWNLOAD_URL"
+    wget -O "cli-alpine-x64.tar.gz" "$DOWNLOAD_URL"
     tar -xzf "cli-alpine-x64.tar.gz"
     mv cursor cursor-${commit}
     rm "cli-alpine-x64.tar.gz"
