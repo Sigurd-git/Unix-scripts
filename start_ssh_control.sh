@@ -1,8 +1,8 @@
 #!/bin/bash
 current_path="$(dirname "$0")"
 source $current_path/read_user_password.sh
-CLUSTER_DEFAULT=bluehive
-CLUSTER=$CLUSTER_DEFAULT  # Set the default value here, it can be bluehive or bhward
+CLUSTER_DEFAULT=bluehive3
+CLUSTER=$CLUSTER_DEFAULT  # Set the default value here; supported values are bluehive3, bluehive, or bhward
 
 # 使用getopt处理命令行选项
 TEMP=$(getopt -o a: --long cluster: -n 'ssh_control.sh' -- "$@")
@@ -33,12 +33,14 @@ done
 echo "Starting SSH session to $CLUSTER."
 
 # Set HOSTNAME based on CLUSTER
-if [ "$CLUSTER" = "bluehive" ]; then
+if [ "$CLUSTER" = "bluehive3" ]; then
+    HOSTNAME="bluehive3.circ.rochester.edu"
+elif [ "$CLUSTER" = "bluehive" ]; then
     HOSTNAME="bluehive.circ.rochester.edu"
 elif [ "$CLUSTER" = "bhward" ]; then
     HOSTNAME="bhward.circ.rochester.edu"
 else
-    echo "Error: Unknown cluster '$CLUSTER'. Supported clusters: bluehive, bhward"
+    echo "Error: Unknown cluster '$CLUSTER'. Supported clusters: bluehive3, bluehive, bhward"
     exit 1
 fi
 # Detect OS and use appropriate sshpass binary
