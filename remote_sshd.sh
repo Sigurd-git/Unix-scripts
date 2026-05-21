@@ -69,15 +69,17 @@ echo "MEMORY: $MEMORY"
 echo "TIME: $TIME"
 echo "NODE: $NODE"
 # Set HOSTNAME based on CLUSTER
-if [ "$CLUSTER" = "bluehive" ]; then
+if [ "$CLUSTER" = "bluehive3" ]; then
+    HOSTNAME="bluehive3.circ.rochester.edu"
+elif [ "$CLUSTER" = "bluehive" ]; then
     HOSTNAME="bluehive.circ.rochester.edu"
 elif [ "$CLUSTER" = "bhward" ]; then
     HOSTNAME="bhward.circ.rochester.edu"
 else
-    echo "Error: Unknown cluster '$CLUSTER'. Supported clusters: bluehive, bhward"
+    echo "Error: Unknown cluster '$CLUSTER'. Supported clusters: bluehive3, bluehive, bhward"
     exit 1
 fi
-source $current_path/start_ssh_control.sh -a $USER@$HOSTNAME
+source "$current_path/start_ssh_control.sh" -a "$CLUSTER"
 
 ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $USER@$HOSTNAME <<ENDSSH
 #!/bin/bash
