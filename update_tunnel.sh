@@ -1,9 +1,49 @@
 #!/bin/bash
 current_path="$(dirname "$0")"
-source $current_path/start_ssh_control.sh 
+source "$current_path/cluster_helpers.sh"
 
-CLUSTER="bluehive"
-HOSTNAME="bluehive.circ.rochester.edu"
+CLUSTER="bluehive3"
+
+usage() {
+    echo "Usage: $0 [-a|--cluster CLUSTER]"
+    echo "Supported clusters: $(cluster_supported_list)"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -a|--cluster)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a cluster name" >&2
+                exit 1
+            fi
+            CLUSTER="$2"
+            shift 2
+            ;;
+        --cluster=*)
+            CLUSTER="${1#*=}"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Error: Unexpected argument '$1'" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+require_cluster "$CLUSTER" || exit 1
+HOSTNAME="$(cluster_hostname "$CLUSTER")" || exit 1
+
+source "$current_path/start_ssh_control.sh" -a "$CLUSTER"
+
 # Define variables
 INSTALL_DIR="/home/$USER/.cursor/cli/servers"
 # Get commit info locally
@@ -14,7 +54,7 @@ DOWNLOAD_URL="https://cursor.blob.core.windows.net/remote-releases/${version}-${
 echo "Updating Cursor Server to version $version..."
 
 # Execute commands on remote server
-ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no $USER@$HOSTNAME<<ENDSSH
+ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no "$USER@$HOSTNAME"<<ENDSSH
 cd "$INSTALL_DIR"
 module load pigz
 # Check if the version already exists

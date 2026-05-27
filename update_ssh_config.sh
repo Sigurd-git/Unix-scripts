@@ -1,7 +1,9 @@
 #!/bin/bash
+current_path="$(dirname "$0")"
+source "$current_path/cluster_helpers.sh"
 
 # Default values
-CLUSTER="bluehive"
+CLUSTER="bluehive3"
 NODE=""
 PARTITION="doppelbock"
 PORT="22"  # 默认SSH端口
@@ -20,18 +22,7 @@ done
 # SSH config file path
 SSH_CONFIG="$HOME/.ssh/config"
 
-case "$CLUSTER" in
-    bluehive3)
-        COMPUTE_HOST="bluehive_compute3"
-        ;;
-    bluehive|bhward)
-        COMPUTE_HOST="${CLUSTER}_compute"
-        ;;
-    *)
-        echo "Error: Unknown cluster $CLUSTER" >&2
-        exit 1
-        ;;
-esac
+COMPUTE_HOST="$(cluster_compute_host "$CLUSTER")" || exit 1
 
 if ! awk -v target="$COMPUTE_HOST" '
     /^Host[[:space:]]/ {

@@ -5,7 +5,7 @@ My macOS scripts for convenient cluster management using iTerm or Terminal, with
 ## Features
 
 - **GUI Cluster Manager**: Modern tkinter-based interface for cluster management
-- **Automatic Hostname Mapping**: Supports bluehive and bhward clusters with automatic hostname resolution
+- **Automatic Hostname Mapping**: Supports bluehive, bluehive3, and bhward clusters with automatic hostname resolution
 - **SSH Password Automation**: Uses expect-based automation instead of sshpass dependency
 - **Real-time Output**: Live command output display and monitoring
 - **Persistent Credentials**: Secure credential storage with optional password saving
@@ -13,6 +13,7 @@ My macOS scripts for convenient cluster management using iTerm or Terminal, with
 ## Supported Clusters
 
 - **bluehive**: `bluehive.circ.rochester.edu`
+- **bluehive3**: `bluehive3.circ.rochester.edu`
 - **bhward**: `bhward.circ.rochester.edu`
 
 All scripts automatically map cluster names to their full hostnames.
@@ -70,6 +71,12 @@ Host bluehive
     ControlMaster auto
     ControlPath /tmp/ssh_bluehive
 
+Host bluehive3
+    Hostname bluehive3.circ.rochester.edu
+    User username
+    ControlMaster auto
+    ControlPath /tmp/ssh_bluehive3
+
 Host bhward
     Hostname bhward.circ.rochester.edu
     User username
@@ -80,6 +87,12 @@ Host bluehive_compute
     Hostname bhg0061
     User username
     ProxyJump bluehive
+
+Host bluehive_compute3
+    # remote_sshd.sh/update_ssh_config.sh rewrites this to the allocated node.
+    Hostname bhg0049
+    User username
+    ProxyJump bluehive3
 ```
 
 ## Usage
@@ -99,11 +112,14 @@ The GUI provides:
 ### Command Line Interface
 
 ```bash
-# Connect to bluehive with default parameters
+# Connect to bluehive3 with default parameters
 ./tunnel.sh
 
 # Connect to bhward with custom parameters
 ./tunnel.sh -a bhward -p doppelbock -c 16 -g 1 -m 256 -t 12
+
+# Connect to bluehive3 explicitly
+./tunnel.sh -a bluehive3 -p preempt -c 16 -g 1 -m 256 -t 12
 
 # Update cursor server
 ./update_code.sh
@@ -111,7 +127,7 @@ The GUI provides:
 
 ### Parameters
 
-- `-a CLUSTER`: Cluster name (bluehive, bhward)
+- `-a CLUSTER`: Cluster name (bluehive, bluehive3, bhward; default: bluehive3)
 - `-p PARTITION`: SLURM partition (default: doppelbock)
 - `-c CPUS`: Number of CPU cores (default: 16)
 - `-g GPUS`: Number of GPUs (default: 1)

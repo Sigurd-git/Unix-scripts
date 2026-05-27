@@ -1,27 +1,60 @@
 #!/bin/bash
 current_path="$(dirname "$0")"
-source $current_path/start_ssh_control.sh 
+source "$current_path/cluster_helpers.sh"
 
-# Define variables
-INSTALL_DIR="/home/$USER/.cursor-server"
+CLUSTER="bluehive3"
+
+usage() {
+    echo "Usage: $0 [-a|--cluster CLUSTER]"
+    echo "Supported clusters: $(cluster_supported_list)"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -a|--cluster)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a cluster name" >&2
+                exit 1
+            fi
+            CLUSTER="$2"
+            shift 2
+            ;;
+        --cluster=*)
+            CLUSTER="${1#*=}"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Error: Unexpected argument '$1'" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
 # Get commit info locally
 commit=$(cursor --version | head -n 2 | tail -n 1 | cut -d ' ' -f 2)
 DOWNLOAD_URL="https://cursor.blob.core.windows.net/remote-releases/${commit}/cli-alpine-x64.tar.gz"
 
-# Set HOSTNAME based on CLUSTER
-if [ "$CLUSTER" = "bluehive" ]; then
-    HOSTNAME="bluehive.circ.rochester.edu"
-elif [ "$CLUSTER" = "bhward" ]; then
-    HOSTNAME="bhward.circ.rochester.edu"
-else
-    echo "Error: Unknown cluster '$CLUSTER'. Supported clusters: bluehive, bhward"
-    exit 1
-fi
+require_cluster "$CLUSTER" || exit 1
+HOSTNAME="$(cluster_hostname "$CLUSTER")" || exit 1
+
+source "$current_path/start_ssh_control.sh" -a "$CLUSTER"
+
+# Define variables after start_ssh_control.sh loads the remote username.
+INSTALL_DIR="/home/$USER/.cursor-server"
 
 echo "Updating Cursor Server to version $version..."
 
 # Execute commands on remote server
-ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no $USER@$HOSTNAME<<ENDSSH
+ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no "$USER@$HOSTNAME"<<ENDSSH
 cd "$INSTALL_DIR"
 # Check if the version already exists
 if [ -d "cursor-${commit}" ]; then

@@ -4,27 +4,26 @@ source $current_path/read_user_password.sh
 CLUSTER_DEFAULT=bluehive3
 CLUSTER=$CLUSTER_DEFAULT  # Set the default value here; supported values are bluehive3, bluehive, or bhward
 
-# 使用getopt处理命令行选项
-TEMP=$(getopt -o a: --long cluster: -n 'ssh_control.sh' -- "$@")
-if [ $? != 0 ]; then
-    echo "Terminating..." >&2
-    exit 1
-fi
-
-# Process the arguments passed to the script
-eval set -- "$TEMP"
-while true; do
+while [[ $# -gt 0 ]]; do
     case "$1" in
         -a|--cluster)
-            CLUSTER=$2
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a cluster name" >&2
+                exit 1
+            fi
+            CLUSTER="$2"
             shift 2
             ;;
         --)
             shift
             break
             ;;
+        -*)
+            echo "Error: Unknown option '$1'" >&2
+            exit 1
+            ;;
         *)
-            echo "Internal error!"
+            echo "Error: Unexpected argument '$1'" >&2
             exit 1
             ;;
     esac

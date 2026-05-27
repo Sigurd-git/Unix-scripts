@@ -82,7 +82,7 @@ class LoginPage:
         # Initialize variables
         self.user_var = tk.StringVar()
         self.password_var = tk.StringVar()
-        self.cluster_var = tk.StringVar(value="bluehive")
+        self.cluster_var = tk.StringVar(value="bluehive3")
         self.remember_password = tk.BooleanVar()
         self.password_visible = tk.BooleanVar(value=False)
 
@@ -287,7 +287,7 @@ class LoginPage:
         cluster_combo = ttk.Combobox(
             parent,
             textvariable=self.cluster_var,
-            values=["bluehive", "bhward"],
+            values=["bluehive", "bluehive3", "bhward"],
             state="readonly",
             style="Modern.TEntry",
             width=22,
@@ -412,7 +412,6 @@ class LoginPage:
                 "./start_ssh_control.sh",
                 "-a",
                 cluster,
-                "echo 'Connection test successful'",
             ]
 
             result = subprocess.run(
@@ -1222,7 +1221,7 @@ class MainPage:
             self.append_output("=== Updating Cursor Server ===\n")
 
             # Execute update_tunnel.sh script
-            update_cmd = ["./update_tunnel.sh"]
+            update_cmd = ["./update_tunnel.sh", "-a", self.user_info["cluster"]]
 
             # Execute in background thread
             thread = threading.Thread(target=self.run_update_script, args=(update_cmd,))

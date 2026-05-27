@@ -1,13 +1,14 @@
 #!/bin/bash
 current_path="$(dirname "$0")"
+source "$current_path/cluster_helpers.sh"
 
 # Set default value.
-CLUSTER=bluehive
+CLUSTER=bluehive3
 PARTITION=doppelbock
 CPUS=16
-GPUS=0
+GPUS=1
 MEMORY=256
-TIME=12
+TIME=24
 PORT=30022
 # Use getopt to handle command line options.
 TEMP=$(getopt p:a:c:g:m:t:w: $*)
@@ -68,17 +69,7 @@ echo "GPUS: $GPUS"
 echo "MEMORY: $MEMORY"
 echo "TIME: $TIME"
 echo "NODE: $NODE"
-# Set HOSTNAME based on CLUSTER
-if [ "$CLUSTER" = "bluehive3" ]; then
-    HOSTNAME="bluehive3.circ.rochester.edu"
-elif [ "$CLUSTER" = "bluehive" ]; then
-    HOSTNAME="bluehive.circ.rochester.edu"
-elif [ "$CLUSTER" = "bhward" ]; then
-    HOSTNAME="bhward.circ.rochester.edu"
-else
-    echo "Error: Unknown cluster '$CLUSTER'. Supported clusters: bluehive3, bluehive, bhward"
-    exit 1
-fi
+HOSTNAME="$(cluster_hostname "$CLUSTER")" || exit 1
 source "$current_path/start_ssh_control.sh" -a "$CLUSTER"
 
 ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $USER@$HOSTNAME <<ENDSSH

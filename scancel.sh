@@ -1,51 +1,97 @@
 #!/bin/bash
-current_path="$(dirname "$0")"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/cluster_helpers.sh"
 
-CLUSTER=bluehive
+CLUSTER="${SCANCEL_CLUSTER:-bluehive3}"
+SCANCEL_ARGS=()
+SSH_LOCALE_ENV=(LC_ALL=C LANG=C LC_CTYPE=C)
 
-# Use getopt to parse command line options
-TEMP=$(getopt -o a: --long cluster: -n 'scancel.sh' -- "$@")
-if [ $? != 0 ]; then
-    echo "Terminating..." >&2
-    exit 1
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [wrapper-options] [--] [scancel-options] [job_id ...]
+
+Wrapper options:
+  -a, --cluster CLUSTER          SSH cluster to run scancel on
+      --remote-cluster CLUSTER   Same as --cluster, avoids scancel option clashes
+      --wrapper-help             Show this help
+
+All other arguments are forwarded unchanged to remote scancel.
+Use -- when a scancel argument conflicts with a wrapper option.
+EOF
+}
+
+set_cluster() {
+    if ! require_cluster "$1"; then
+        exit 1
+    fi
+    CLUSTER="$1"
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --wrapper-help)
+                usage
+                exit 0
+                ;;
+            -a|--cluster|--remote-cluster)
+                if [[ $# -lt 2 || -z "$2" ]]; then
+                    echo "Error: $1 requires a cluster name" >&2
+                    exit 1
+                fi
+                set_cluster "$2"
+                shift 2
+                ;;
+            --cluster=*|--remote-cluster=*)
+                set_cluster "${1#*=}"
+                shift
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
+    SCANCEL_ARGS=("$@")
+}
+
+shell_quote() {
+    local value="$1"
+    value=${value//\'/\'\\\'\'}
+    printf "'%s'" "$value"
+}
+
+build_remote_command() {
+    local remote_command=""
+    local arg
+
+    for arg in scancel "$@"; do
+        if [[ -n "$remote_command" ]]; then
+            remote_command+=" "
+        fi
+        remote_command+="$(shell_quote "$arg")"
+    done
+
+    printf "%s" "$remote_command"
+}
+
+main() {
+    local remote_command
+    local login_command
+
+    parse_args "$@"
+
+    env "${SSH_LOCALE_ENV[@]}" "$script_dir/start_ssh_control.sh" -a "$CLUSTER" || exit $?
+
+    remote_command="$(build_remote_command "${SCANCEL_ARGS[@]}")"
+    login_command="LC_ALL=C LANG=C LC_CTYPE=C bash -lc $(shell_quote "$remote_command")"
+    exec env "${SSH_LOCALE_ENV[@]}" ssh -T "$CLUSTER" "$login_command"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
 fi
-
-# Reorder command line arguments
-eval set -- "$TEMP"
-
-while true; do
-    case "$1" in
-        -a|--cluster)
-            CLUSTER=$2
-            shift 2
-            ;;
-        --)
-            shift
-            break
-            ;;
-        *)
-            break
-            ;;
-    esac
-done
-
-# Check if job ID argument is provided
-if [ $# -lt 1 ]; then
-    echo "Usage: $0 [options] job_id [extra parameters]"
-    exit 1
-fi
-JOB_ID=$1
-shift
-EXTRA_ARGS="$@"
-
-# Source SSH control script
-source "$current_path/start_ssh_control.sh" -a $CLUSTER
-
-# SSH into the cluster and cancel the specified job
-ssh $CLUSTER <<ENDSSH
-    echo "---------------------------------"
-    echo "Canceling job with ID: ${JOB_ID} with extra parameters: ${EXTRA_ARGS}"
-    scancel ${JOB_ID} ${EXTRA_ARGS}
-    echo "Job ${JOB_ID} has been cancelled."
-    echo "---------------------------------"
-ENDSSH

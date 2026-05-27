@@ -1,8 +1,9 @@
 #!/bin/bash
 current_path="$(dirname "$0")"
+source "$current_path/cluster_helpers.sh"
 
 # Set default value.
-CLUSTER=bluehive
+CLUSTER=bluehive3
 PARTITION=doppelbock
 CPUS=16
 GPUS=1
@@ -10,57 +11,89 @@ MEMORY=256
 TIME=12
 NO_LOG=false
 
-# Use getopt to handle command line options.
-TEMP=$(getopt p:a:c:g:m:t:w:n $*)
-if [ $? != 0 ]; then
-    echo "Terminating..." >&2
-    exit 1
-fi
-# 
-# Reordered processed command line arguments
-eval set -- "$TEMP"
+usage() {
+    echo "Usage: $0 [-a CLUSTER] [-p PARTITION] [-c CPUS] [-g GPUS] [-m MEMORY_GB] [-t HOURS] [-w NODE] [-n]"
+    echo "Supported clusters: $(cluster_supported_list)"
+}
 
 # Iterate options through the case statement.
-while true; do
+while [[ $# -gt 0 ]]; do
     case "$1" in
-        -p)
+        -p|--partition)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a partition" >&2
+                exit 1
+            fi
             PARTITION=$2
             shift 2
             ;;
-        -a)
+        -a|--cluster)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a cluster name" >&2
+                exit 1
+            fi
             CLUSTER=$2
             shift 2
             ;;
-        -c)
+        --cluster=*)
+            CLUSTER="${1#*=}"
+            shift
+            ;;
+        -c|--cpus)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a CPU count" >&2
+                exit 1
+            fi
             CPUS=$2
             shift 2
             ;;
-        -g)
+        -g|--gpus)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a GPU count" >&2
+                exit 1
+            fi
             GPUS=$2
             shift 2
             ;;
-        -m)
+        -m|--memory)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a memory value" >&2
+                exit 1
+            fi
             MEMORY=$2
             shift 2
             ;;
-        -t)
+        -t|--time)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a runtime in hours" >&2
+                exit 1
+            fi
             TIME=$2
             shift 2
             ;;
-        -w)
+        -w|--node)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a node name" >&2
+                exit 1
+            fi
             NODE=$2
             shift 2
             ;;
-        -n)
+        -n|--no-log)
             NO_LOG=true
             shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
             ;;
         --)
             shift
             break
             ;;
         *)
-            echo "Internal error!"
+            echo "Error: Unexpected argument '$1'" >&2
+            usage >&2
             exit 1
             ;;
     esac
@@ -75,21 +108,14 @@ echo "TIME: $TIME"
 echo "NODE: $NODE"
 echo "NO_LOG: $NO_LOG"
 
-# Set HOSTNAME based on CLUSTER
-if [ "$CLUSTER" = "bluehive" ]; then
-    HOSTNAME="bluehive.circ.rochester.edu"
-elif [ "$CLUSTER" = "bhward" ]; then
-    HOSTNAME="bhward.circ.rochester.edu"
-else
-    echo "Error: Unknown cluster '$CLUSTER'. Supported clusters: bluehive, bhward"
-    exit 1
-fi
+require_cluster "$CLUSTER" || exit 1
+HOSTNAME="$(cluster_hostname "$CLUSTER")" || exit 1
 
 echo "HOSTNAME: $HOSTNAME"
 
-source $current_path/start_ssh_control.sh 
+source "$current_path/start_ssh_control.sh" -a "$CLUSTER"
 
-ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no $USER@$HOSTNAME <<ENDSSH
+ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no "$USER@$HOSTNAME" <<ENDSSH
 #!/bin/bash
 module load gcc
 mkdir -p /home/$USER/logs
