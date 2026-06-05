@@ -136,11 +136,6 @@ The GUI provides:
 - `-w NODE`: Specific node (optional)
 - `-n`: Disable logging
 
-## Documentation
-
-See the `documents/` directory for detailed documentation:
-- **English**: Comprehensive guides for SSH automation, GUI usage, and method comparisons
-- **中文**: 完整的中文文档，包含SSH自动化、GUI使用和方法对比
 
 ## Security Features
 
