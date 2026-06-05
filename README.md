@@ -54,8 +54,11 @@ source .venv/bin/activate
 Create `user_password.txt` in the same directory:
 ```
 username
-password  # Optional, for password saving
+password
+/scratch/snormanh_lab/shared
 ```
+
+The third line is the remote tool root for `code`, `cursor`, and `dropbear`.
 
 ### 4. SSH Configuration (Optional)
 
@@ -108,21 +111,31 @@ The GUI provides:
 - Parameter configuration for all tunnel options
 - Real-time output display
 - Cluster selection with automatic hostname mapping
+- Remote SSHD launch through `remote_sshd.sh`, including SSH config update for the allocated node
+- Remote tool root configuration for automatic deployment of `code`, `cursor`, and `dropbear`
+
+For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.en.md](ADMIN_INIT.en.md).
 
 ### Command Line Interface
 
 ```bash
-# Connect to bluehive3 with default parameters
+# Start a VS Code tunnel on bluehive3 with default parameters
 ./tunnel.sh
 
-# Connect to bhward with custom parameters
+# Start a VS Code tunnel on bhward with custom parameters
 ./tunnel.sh -a bhward -p doppelbock -c 16 -g 1 -m 256 -t 12
 
-# Connect to bluehive3 explicitly
+# Start a VS Code tunnel on bluehive3 explicitly
 ./tunnel.sh -a bluehive3 -p preempt -c 16 -g 1 -m 256 -t 12
 
-# Update cursor server
-./update_code.sh
+# Start a Cursor tunnel instead of the default VS Code tunnel
+./tunnel.sh -a bluehive3 --tool cursor -p doppelbock -c 16 -g 1 -m 256 -t 12
+
+# Start a Dropbear SSHD job and update the compute host entry in ~/.ssh/config
+./remote_sshd.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
+
+# Deploy or repair remote tools manually
+./deploy_remote_tools.sh -a bluehive3 --all
 ```
 
 ### Parameters
@@ -135,6 +148,8 @@ The GUI provides:
 - `-t TIME`: Runtime in hours (default: 12)
 - `-w NODE`: Specific node (optional)
 - `-n`: Disable logging
+- `--tool code|cursor`: Tunnel backend for `tunnel.sh` (default: `code`)
+- `--root PATH`: Override the remote tool root from `user_password.txt`
 
 
 ## Security Features

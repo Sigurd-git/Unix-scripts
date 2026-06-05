@@ -18,6 +18,9 @@ import queue
 from pathlib import Path
 
 
+DEFAULT_REMOTE_SHARED_ROOT = "/scratch/snormanh_lab/shared"
+
+
 # Modern color scheme constants
 class Colors:
     # Primary colors
@@ -83,6 +86,7 @@ class LoginPage:
         self.user_var = tk.StringVar()
         self.password_var = tk.StringVar()
         self.cluster_var = tk.StringVar(value="bluehive3")
+        self.remote_shared_root_var = tk.StringVar(value=DEFAULT_REMOTE_SHARED_ROOT)
         self.remember_password = tk.BooleanVar()
         self.password_visible = tk.BooleanVar(value=False)
 
@@ -294,9 +298,21 @@ class LoginPage:
         )
         cluster_combo.grid(row=2, column=1, sticky=tk.EW, pady=(0, 15))
 
+        # Remote tools root
+        ttk.Label(parent, text="📁 Tools root:", style="Body.TLabel").grid(
+            row=3, column=0, sticky=tk.W, pady=(0, 15), padx=(0, 20)
+        )
+
+        ttk.Entry(
+            parent,
+            textvariable=self.remote_shared_root_var,
+            style="Modern.TEntry",
+            width=25,
+        ).grid(row=3, column=1, sticky=tk.EW, pady=(0, 15))
+
         # Remember password checkbox
         remember_frame = tk.Frame(parent, bg=Colors.BG_CARD)
-        remember_frame.grid(row=3, column=1, sticky=tk.W, pady=(0, 10))
+        remember_frame.grid(row=4, column=1, sticky=tk.W, pady=(0, 10))
 
         remember_cb = ttk.Checkbutton(
             remember_frame,
@@ -342,6 +358,13 @@ class LoginPage:
             if len(lines) >= 2:
                 self.password_var.set(lines[1].strip())
                 self.remember_password.set(True)
+            if len(lines) >= 3:
+                remote_shared_root = lines[2].strip()
+                if remote_shared_root.startswith("REMOTE_SHARED_ROOT="):
+                    remote_shared_root = remote_shared_root.split("=", 1)[1]
+                self.remote_shared_root_var.set(
+                    remote_shared_root or DEFAULT_REMOTE_SHARED_ROOT
+                )
 
     def save_user_credentials(self):
         """Save user credentials to user_password.txt file."""
@@ -349,6 +372,8 @@ class LoginPage:
 
         # Always save username
         content = f"{self.user_var.get()}\n"
+        content += "\n"
+        content += f"{self.get_remote_shared_root()}\n"
 
         user_password_file.write_text(content)
 
@@ -358,9 +383,14 @@ class LoginPage:
 
         # Always save username
         content = f"{self.user_var.get()}\n"
-        content += f"{self.password_var.get()}"
+        content += f"{self.password_var.get()}\n"
+        content += f"{self.get_remote_shared_root()}\n"
 
         user_password_file.write_text(content)
+
+    def get_remote_shared_root(self):
+        """Return the remote binary root, falling back to the default."""
+        return self.remote_shared_root_var.get().strip() or DEFAULT_REMOTE_SHARED_ROOT
 
     def toggle_password_visibility(self):
         """Toggle password visibility."""
@@ -442,6 +472,7 @@ class LoginPage:
             "password": self.password_var.get(),
             "cluster": self.cluster_var.get(),
             "remember_password": self.remember_password.get(),
+            "remote_shared_root": self.get_remote_shared_root(),
         }
 
         # Switch to main page after brief delay
@@ -464,7 +495,7 @@ class MainPage:
 
     Provides interface for:
     - Cluster connection parameter configuration
-    - tunnel.sh script execution and monitoring with real-time output
+    - tunnel.sh and remote_sshd.sh execution with real-time output
     - pls.sh script execution
     - Cursor server updates
     """
@@ -491,6 +522,7 @@ class MainPage:
             "memory": "256",
             "time": "12",
             "node": "",
+            "tunnel_tool": "code",
             "no_log": False,
         }
 
@@ -832,10 +864,26 @@ class MainPage:
             width=18,
         ).grid(row=row, column=1, sticky=tk.EW, pady=6, padx=(0, 30))
 
+        # Tunnel tool
+        ttk.Label(params_frame, text="🧰 Tunnel tool:", style="Body.TLabel").grid(
+            row=row, column=2, sticky=tk.W, pady=6, padx=(0, 15)
+        )
+
+        ttk.Combobox(
+            params_frame,
+            textvariable=self.param_vars["tunnel_tool"],
+            values=["code", "cursor"],
+            state="readonly",
+            style="MainEntry.TEntry",
+            width=18,
+        ).grid(row=row, column=3, sticky=tk.EW, pady=6)
+
+        row += 1
+
         # No Log checkbox with modern styling
         checkbox_frame = tk.Frame(params_frame, bg=Colors.BG_CARD)
         checkbox_frame.grid(
-            row=row, column=2, columnspan=2, sticky=tk.W, pady=6, padx=(0, 15)
+            row=row, column=1, sticky=tk.W, pady=6, padx=(0, 30)
         )
 
         ttk.Checkbutton(
@@ -862,6 +910,15 @@ class MainPage:
         )
         self.connect_btn.pack(side=tk.LEFT, padx=(0, 15), ipadx=15, ipady=8)
 
+        # Remote SSHD button
+        self.remote_sshd_btn = ttk.Button(
+            left_buttons,
+            text="🔐 Execute remote_sshd.sh",
+            style="MainAction.TButton",
+            command=self.execute_remote_sshd_script,
+        )
+        self.remote_sshd_btn.pack(side=tk.LEFT, padx=(0, 15), ipadx=15, ipady=8)
+
         # PLS button
         self.pls_btn = ttk.Button(
             left_buttons,
@@ -885,13 +942,20 @@ class MainPage:
         right_buttons = tk.Frame(button_frame, bg=Colors.BG_LIGHT)
         right_buttons.pack(side=tk.RIGHT)
 
-        update_btn = ttk.Button(
+        self.update_btn = ttk.Button(
             right_buttons,
-            text="🔄 Update Cursor Server",
+            text="🔄 Deploy Remote Tools",
             style="Warning.TButton",
             command=self.update_cursor_server,
         )
-        update_btn.pack(ipadx=15, ipady=8)
+        self.update_btn.pack(ipadx=15, ipady=8)
+
+        self.action_buttons = [
+            self.connect_btn,
+            self.remote_sshd_btn,
+            self.pls_btn,
+            self.update_btn,
+        ]
 
         # Status section
         status_frame = tk.Frame(parent, bg=Colors.BG_LIGHT)
@@ -1045,90 +1109,53 @@ class MainPage:
             self.append_output(f"User: {username}\n")
             self.append_output("=" * 50 + "\n")
 
-            # Update UI state
-            self.status_label.config(
-                text="🚀 Executing tunnel.sh script...", foreground=Colors.WARNING
-            )
-            self.connect_btn.config(state=tk.DISABLED)
-            self.pls_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.NORMAL)
-            self.is_running = True
-
             # Build tunnel.sh command with parameters
-            tunnel_cmd = ["./tunnel.sh"]
+            tunnel_cmd = self.build_resource_command("./tunnel.sh")
+            tunnel_cmd.extend(["--tool", self.param_vars["tunnel_tool"].get()])
 
-            # Add cluster parameter
-            tunnel_cmd.extend(["-a", cluster])
-
-            # Add partition parameter
-            tunnel_cmd.extend(["-p", self.param_vars["partition"].get()])
-
-            # Add CPUs parameter
-            tunnel_cmd.extend(["-c", self.param_vars["cpus"].get()])
-
-            # Add GPUs parameter
-            tunnel_cmd.extend(["-g", self.param_vars["gpus"].get()])
-
-            # Add memory parameter
-            tunnel_cmd.extend(["-m", self.param_vars["memory"].get()])
-
-            # Add time parameter
-            tunnel_cmd.extend(["-t", self.param_vars["time"].get()])
-
-            # Add node parameter if specified
-            if self.param_vars["node"].get():
-                tunnel_cmd.extend(["-w", self.param_vars["node"].get()])
-
-            # Add no log flag if enabled
             if self.param_vars["no_log"].get():
                 tunnel_cmd.append("-n")
 
-            # Execute in background thread
-            thread = threading.Thread(target=self.run_tunnel_script, args=(tunnel_cmd,))
-            thread.daemon = True
-            thread.start()
+            self.start_script_execution(
+                tunnel_cmd,
+                status_text="🚀 Executing tunnel.sh script...",
+                success_status="success",
+                error_status_prefix="error",
+            )
 
         except Exception as e:
             self.append_output(f"Error setting up tunnel.sh execution: {str(e)}\n")
             self.reset_ui_state()
 
-    def run_tunnel_script(self, tunnel_cmd):
-        """Run tunnel.sh script in background thread."""
+    def execute_remote_sshd_script(self):
+        """Execute remote_sshd.sh to start Dropbear SSHD on an allocated node."""
+        if self.is_running:
+            messagebox.showwarning(
+                "Warning", "A connection is already running. Please stop it first."
+            )
+            return
+
         try:
-            # Execute tunnel.sh script
-            self.current_process = subprocess.Popen(
-                tunnel_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                bufsize=1,
+            cluster = self.user_info["cluster"]
+            username = self.user_info["username"]
+            self.append_output(f"=== Starting remote SSHD on {cluster} ===\n")
+            self.append_output(f"User: {username}\n")
+            self.append_output("=" * 50 + "\n")
+
+            remote_sshd_cmd = self.build_resource_command("./remote_sshd.sh")
+
+            self.start_script_execution(
+                remote_sshd_cmd,
+                status_text="🔐 Executing remote_sshd.sh script...",
+                success_status="remote_sshd_success",
+                error_status_prefix="remote_sshd_error",
             )
 
-            self.append_output(f"✓ Executing: {' '.join(tunnel_cmd)}\n")
-
-            # Read output line by line in real-time
-            while self.current_process and self.current_process.poll() is None:
-                try:
-                    output = self.current_process.stdout.readline()
-                    if output:
-                        self.append_output(output)
-                except Exception as e:
-                    self.append_output(f"Error reading output: {str(e)}\n")
-                    break
-
-            # Get return code if process still exists
-            if self.current_process:
-                return_code = self.current_process.poll()
-
-                if return_code == 0:
-                    self.output_queue.put(("status", "success"))
-                else:
-                    self.output_queue.put(("status", f"error:{return_code}"))
-
         except Exception as e:
-            self.output_queue.put(("status", f"exception:{str(e)}"))
-        finally:
-            self.current_process = None
+            self.append_output(
+                f"Error setting up remote_sshd.sh execution: {str(e)}\n"
+            )
+            self.reset_ui_state()
 
     def execute_pls_script(self):
         """Execute pls.sh script."""
@@ -1139,69 +1166,24 @@ class MainPage:
             return
 
         try:
-            # Update UI state
-            self.status_label.config(
-                text="📊 Executing pls.sh script...", foreground=Colors.WARNING
-            )
-            self.connect_btn.config(state=tk.DISABLED)
-            self.pls_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.NORMAL)
-            self.is_running = True
-
             self.append_output("=== Executing pls.sh script ===\n")
 
             # Execute pls.sh script
             pls_cmd = ["./pls.sh", "-a", self.user_info["cluster"]]
 
-            # Execute in background thread
-            thread = threading.Thread(target=self.run_pls_script, args=(pls_cmd,))
-            thread.daemon = True
-            thread.start()
+            self.start_script_execution(
+                pls_cmd,
+                status_text="📊 Executing pls.sh script...",
+                success_status="success",
+                error_status_prefix="error",
+            )
 
         except Exception as e:
             self.append_output(f"Error executing pls.sh: {str(e)}\n")
             self.reset_ui_state()
 
-    def run_pls_script(self, pls_cmd):
-        """Run pls.sh script in background thread."""
-        try:
-            # Execute pls.sh script
-            self.current_process = subprocess.Popen(
-                pls_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                bufsize=1,
-            )
-
-            self.append_output(f"✓ Executing: {' '.join(pls_cmd)}\n")
-
-            # Read output line by line in real-time
-            while self.current_process and self.current_process.poll() is None:
-                try:
-                    output = self.current_process.stdout.readline()
-                    if output:
-                        self.append_output(output)
-                except Exception as e:
-                    self.append_output(f"Error reading output: {str(e)}\n")
-                    break
-
-            # Get return code if process still exists
-            if self.current_process:
-                return_code = self.current_process.poll()
-
-                if return_code == 0:
-                    self.output_queue.put(("status", "success"))
-                else:
-                    self.output_queue.put(("status", f"error:{return_code}"))
-
-        except Exception as e:
-            self.output_queue.put(("status", f"exception:{str(e)}"))
-        finally:
-            self.current_process = None
-
     def update_cursor_server(self):
-        """Execute cursor server update command."""
+        """Deploy remote tools to the configured shared root."""
         if self.is_running:
             messagebox.showwarning(
                 "Warning", "A connection is already running. Please stop it first."
@@ -1209,51 +1191,101 @@ class MainPage:
             return
 
         try:
-            # Update UI state
-            self.status_label.config(
-                text="🔄 Updating cursor server...", foreground=Colors.WARNING
+            self.append_output("=== Deploying Remote Tools ===\n")
+
+            update_cmd = [
+                "./deploy_remote_tools.sh",
+                "-a",
+                self.user_info["cluster"],
+                "--root",
+                self.user_info.get("remote_shared_root", DEFAULT_REMOTE_SHARED_ROOT),
+                "--all",
+            ]
+
+            self.start_script_execution(
+                update_cmd,
+                status_text="🔄 Deploying remote tools...",
+                success_status="update_success",
+                error_status_prefix="update_error",
             )
-            self.connect_btn.config(state=tk.DISABLED)
-            self.pls_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.NORMAL)
-            self.is_running = True
-
-            self.append_output("=== Updating Cursor Server ===\n")
-
-            # Execute update_tunnel.sh script
-            update_cmd = ["./update_tunnel.sh", "-a", self.user_info["cluster"]]
-
-            # Execute in background thread
-            thread = threading.Thread(target=self.run_update_script, args=(update_cmd,))
-            thread.daemon = True
-            thread.start()
 
         except Exception as e:
-            self.append_output(f"Error setting up cursor server update: {str(e)}\n")
+            self.append_output(f"Error setting up remote tool deployment: {str(e)}\n")
             self.reset_ui_state()
 
-    def run_update_script(self, update_cmd):
-        """Run update_code.sh script in background thread."""
+    def build_resource_command(self, script_name):
+        """Build a command with the shared SLURM resource parameters."""
+        cmd = [
+            script_name,
+            "-a",
+            self.user_info["cluster"],
+            "-p",
+            self.param_vars["partition"].get(),
+            "-c",
+            self.param_vars["cpus"].get(),
+            "-g",
+            self.param_vars["gpus"].get(),
+            "-m",
+            self.param_vars["memory"].get(),
+            "-t",
+            self.param_vars["time"].get(),
+            "--root",
+            self.user_info.get("remote_shared_root", DEFAULT_REMOTE_SHARED_ROOT),
+        ]
+
+        if self.param_vars["node"].get():
+            cmd.extend(["-w", self.param_vars["node"].get()])
+
+        return cmd
+
+    def set_action_buttons_state(self, state):
+        """Set all action buttons to the same state when available."""
+        for button in getattr(self, "action_buttons", []):
+            button.config(state=state)
+
+    def start_script_execution(
+        self,
+        cmd,
+        status_text,
+        success_status,
+        error_status_prefix,
+    ):
+        """Update UI state and run a script in a background thread."""
+        self.status_label.config(text=status_text, foreground=Colors.WARNING)
+        self.set_action_buttons_state(tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.is_running = True
+
+        thread = threading.Thread(
+            target=self.run_script,
+            args=(cmd, success_status, error_status_prefix),
+        )
+        thread.daemon = True
+        thread.start()
+
+    def run_script(self, cmd, success_status, error_status_prefix):
+        """Run a script in a background thread and stream its output."""
         try:
-            # Execute update_code.sh script
             self.current_process = subprocess.Popen(
-                update_cmd,
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,
                 bufsize=1,
             )
 
-            self.append_output(f"✓ Executing: {' '.join(update_cmd)}\n")
+            self.output_queue.put(("output", f"✓ Executing: {' '.join(cmd)}\n"))
 
             # Read output line by line in real-time
             while self.current_process and self.current_process.poll() is None:
                 try:
                     output = self.current_process.stdout.readline()
                     if output:
-                        self.append_output(output)
+                        self.output_queue.put(("output", output))
                 except Exception as e:
-                    self.append_output(f"Error reading output: {str(e)}\n")
+                    self.output_queue.put(
+                        ("output", f"Error reading output: {str(e)}\n")
+                    )
                     break
 
             # Get return code if process still exists
@@ -1261,9 +1293,11 @@ class MainPage:
                 return_code = self.current_process.poll()
 
                 if return_code == 0:
-                    self.output_queue.put(("status", "update_success"))
+                    self.output_queue.put(("status", success_status))
                 else:
-                    self.output_queue.put(("status", f"update_error:{return_code}"))
+                    self.output_queue.put(
+                        ("status", f"{error_status_prefix}:{return_code}")
+                    )
 
         except Exception as e:
             self.output_queue.put(("status", f"exception:{str(e)}"))
@@ -1288,8 +1322,7 @@ class MainPage:
     def reset_ui_state(self):
         """Reset UI state after command completion."""
         self.is_running = False
-        self.connect_btn.config(state=tk.NORMAL)
-        self.pls_btn.config(state=tk.NORMAL)
+        self.set_action_buttons_state(tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
         self.current_process = None
 
@@ -1316,11 +1349,19 @@ class MainPage:
                         )
                     elif msg_content == "update_success":
                         self.status_label.config(
-                            text="✅ Cursor server updated successfully",
+                            text="✅ Remote tools deployed successfully",
                             foreground=Colors.SUCCESS,
                         )
                         self.append_output(
-                            "\n=== ✅ Cursor server update completed successfully ===\n"
+                            "\n=== ✅ Remote tool deployment completed successfully ===\n"
+                        )
+                    elif msg_content == "remote_sshd_success":
+                        self.status_label.config(
+                            text="✅ Remote SSHD started successfully",
+                            foreground=Colors.SUCCESS,
+                        )
+                        self.append_output(
+                            "\n=== ✅ remote_sshd.sh completed successfully ===\n"
                         )
                     elif msg_content.startswith("error:"):
                         return_code = msg_content.split(":", 1)[1]
@@ -1334,11 +1375,20 @@ class MainPage:
                     elif msg_content.startswith("update_error:"):
                         return_code = msg_content.split(":", 1)[1]
                         self.status_label.config(
-                            text=f"❌ Cursor server update failed (exit code: {return_code})",
+                            text=f"❌ Remote tool deployment failed (exit code: {return_code})",
                             foreground=Colors.ERROR,
                         )
                         self.append_output(
-                            f"\n=== ❌ Cursor server update failed with exit code: {return_code} ===\n"
+                            f"\n=== ❌ Remote tool deployment failed with exit code: {return_code} ===\n"
+                        )
+                    elif msg_content.startswith("remote_sshd_error:"):
+                        return_code = msg_content.split(":", 1)[1]
+                        self.status_label.config(
+                            text=f"❌ Remote SSHD failed (exit code: {return_code})",
+                            foreground=Colors.ERROR,
+                        )
+                        self.append_output(
+                            f"\n=== ❌ remote_sshd.sh failed with exit code: {return_code} ===\n"
                         )
                     elif msg_content.startswith("exception:"):
                         error = msg_content.split(":", 1)[1]

@@ -10,53 +10,98 @@ GPUS=1
 MEMORY=256
 TIME=24
 PORT=30022
-# Use getopt to handle command line options.
-TEMP=$(getopt p:a:c:g:m:t:w: $*)
-if [ $? != 0 ]; then
-    echo "Terminating..." >&2
-    exit 1
-fi
+ROOT_OVERRIDE=""
 
-# Reordered processed command line arguments
-eval set -- "$TEMP"
+usage() {
+    echo "Usage: $0 [-a CLUSTER] [-p PARTITION] [-c CPUS] [-g GPUS] [-m MEMORY_GB] [-t HOURS] [-w NODE] [--root PATH]"
+    echo "Supported clusters: $(cluster_supported_list)"
+}
 
-# Iterate options through the case statement.
-while true; do
+while [[ $# -gt 0 ]]; do
     case "$1" in
-        -p)
+        -p|--partition)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a partition" >&2
+                exit 1
+            fi
             PARTITION=$2
             shift 2
             ;;
-        -a)
+        -a|--cluster)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a cluster name" >&2
+                exit 1
+            fi
             CLUSTER=$2
             shift 2
             ;;
-        -c)
+        --cluster=*)
+            CLUSTER="${1#*=}"
+            shift
+            ;;
+        -c|--cpus)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a CPU count" >&2
+                exit 1
+            fi
             CPUS=$2
             shift 2
             ;;
-        -g)
+        -g|--gpus)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a GPU count" >&2
+                exit 1
+            fi
             GPUS=$2
             shift 2
             ;;
-        -m)
+        -m|--memory)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a memory value" >&2
+                exit 1
+            fi
             MEMORY=$2
             shift 2
             ;;
-        -t)
+        -t|--time)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a runtime in hours" >&2
+                exit 1
+            fi
             TIME=$2
             shift 2
             ;;
-        -w)
+        -w|--node)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a node name" >&2
+                exit 1
+            fi
             NODE=$2
             shift 2
+            ;;
+        -r|--root)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a remote path" >&2
+                exit 1
+            fi
+            ROOT_OVERRIDE="$2"
+            shift 2
+            ;;
+        --root=*)
+            ROOT_OVERRIDE="${1#*=}"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
             ;;
         --)
             shift
             break
             ;;
         *)
-            echo "Internal error!"
+            echo "Error: Unexpected argument '$1'" >&2
+            usage >&2
             exit 1
             ;;
     esac
@@ -72,9 +117,20 @@ echo "NODE: $NODE"
 HOSTNAME="$(cluster_hostname "$CLUSTER")" || exit 1
 source "$current_path/start_ssh_control.sh" -a "$CLUSTER"
 
+if [ -n "$ROOT_OVERRIDE" ]; then
+    REMOTE_SHARED_ROOT="$ROOT_OVERRIDE"
+    export REMOTE_SHARED_ROOT
+fi
+
+echo "REMOTE_SHARED_ROOT: $REMOTE_SHARED_ROOT"
+
+source "$current_path/remote_tools.sh"
+ensure_remote_dropbear || exit $?
+DROPBEAR_DIR="$REMOTE_SHARED_ROOT/dropbear"
+
 ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $USER@$HOSTNAME <<ENDSSH
 #!/bin/bash
-module load gcc
+module load gcc 2>/dev/null || true
 mkdir -p /home/$USER/logs
 # Your commands go here
 
@@ -95,7 +151,7 @@ else
 #SBATCH --mail-type=BEGIN
 #SBATCH --mail-user=guoyang_liao@urmc.rochester.edu
 
-cd /scratch/snormanh_lab/shared/dropbear
+cd "$DROPBEAR_DIR"
 
 # Function to check if a port is available using ss command
 function check_port_available() {
