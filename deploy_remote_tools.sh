@@ -7,9 +7,10 @@ ROOT_OVERRIDE=""
 DEPLOY_CODE=false
 DEPLOY_CURSOR=false
 DEPLOY_DROPBEAR=false
+DEPLOY_VNC=false
 
 usage() {
-    echo "Usage: $0 [-a CLUSTER] [--root PATH] [--code] [--cursor] [--dropbear] [--all]"
+    echo "Usage: $0 [-a CLUSTER] [--root PATH] [--code] [--cursor] [--dropbear] [--vnc] [--all]"
     echo "Supported clusters: $(cluster_supported_list)"
     echo "If no tool is specified, --all is used."
 }
@@ -52,10 +53,15 @@ while [[ $# -gt 0 ]]; do
             DEPLOY_DROPBEAR=true
             shift
             ;;
+        --vnc)
+            DEPLOY_VNC=true
+            shift
+            ;;
         --all)
             DEPLOY_CODE=true
             DEPLOY_CURSOR=true
             DEPLOY_DROPBEAR=true
+            DEPLOY_VNC=true
             shift
             ;;
         -h|--help)
@@ -74,10 +80,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ "$DEPLOY_CODE" = false ] && [ "$DEPLOY_CURSOR" = false ] && [ "$DEPLOY_DROPBEAR" = false ]; then
+if [ "$DEPLOY_CODE" = false ] && [ "$DEPLOY_CURSOR" = false ] && \
+   [ "$DEPLOY_DROPBEAR" = false ] && [ "$DEPLOY_VNC" = false ]; then
     DEPLOY_CODE=true
     DEPLOY_CURSOR=true
     DEPLOY_DROPBEAR=true
+    DEPLOY_VNC=true
 fi
 
 require_cluster "$CLUSTER" || exit 1
@@ -106,6 +114,10 @@ fi
 
 if [ "$DEPLOY_DROPBEAR" = true ]; then
     ensure_remote_dropbear || exit $?
+fi
+
+if [ "$DEPLOY_VNC" = true ]; then
+    ensure_remote_vnc_bundle || exit $?
 fi
 
 echo "Remote tool deployment completed."

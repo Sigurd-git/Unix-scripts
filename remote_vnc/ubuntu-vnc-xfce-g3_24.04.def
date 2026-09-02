@@ -1,0 +1,2 @@
+Bootstrap: docker
+From: accetto/ubuntu-vnc-xfce-g3@sha256:99e3b0197ec645ac616f67a55768330955529c9da43f39f8c8cc4c4d0c28a3fa

@@ -8,3 +8,4 @@ mine.sh
 .venv/
 **/__pycache__/
 cli-alpine-x64.tar.gz
+remote_vnc/*.sif

@@ -58,7 +58,8 @@ password
 /scratch/snormanh_lab/shared
 ```
 
-The third line is the remote tool root for `code`, `cursor`, and `dropbear`.
+The third line is the remote tool root for `code`, `cursor`, `dropbear`, and
+the per-user VNC files.
 
 ### 4. SSH Configuration (Optional)
 
@@ -112,7 +113,7 @@ The GUI provides:
 - Real-time output display
 - Cluster selection with automatic hostname mapping
 - Remote SSHD launch through `remote_sshd.sh`, including SSH config update for the allocated node
-- Remote tool root configuration for automatic deployment of `code`, `cursor`, and `dropbear`
+- Remote tool root configuration for automatic deployment of `code`, `cursor`, `dropbear`, and VNC files
 
 For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.en.md](ADMIN_INIT.en.md).
 
@@ -136,6 +137,69 @@ For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.
 
 # Deploy or repair remote tools manually
 ./deploy_remote_tools.sh -a bluehive3 --all
+
+# Start VNC and a Slurm-bound SSH shell; add --opencodex when needed
+./remote_vnc.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
+```
+
+### Remote VNC
+
+`remote_vnc.sh` starts an independent Slurm job containing an Apptainer XFCE
+desktop and a public-key-only SSH service. It keeps the `blhc3` SSH alias, so
+both `ssh blhc3` and the terminal opened inside XFCE run in the VNC job's Slurm
+cgroup.
+
+The script reads `REMOTE_SHARED_ROOT` from the third line of
+`user_password.txt`. Override it for one run with `-r` or `--root`:
+
+```bash
+./remote_vnc.sh --root /path/you/can/write --no-open
+```
+
+Small VNC scripts are copied to a checksum-named release only when that release
+is absent. Passwords, keys, logs, state, and a possible private image are kept
+under:
+
+```text
+$REMOTE_SHARED_ROOT/remote-vnc/users/$USER/
+```
+
+`deploy_remote_tools.sh --vnc` and `--all` copy these files but do not build a
+SIF on the login node.
+
+The preferred read-only image is:
+
+```text
+/scratch/snormanh_lab/shared/remote-vnc/images/ubuntu-vnc-xfce-g3_24.04.sif
+```
+
+If it cannot be read or fails its checksum, the VNC Slurm job builds a private
+copy from the pinned Apptainer definition. Git stores the definition and
+checksums, not the SIF binary. The script prints the VNC password file path but
+never prints the password. Set `REMOTE_VNC_SHARED_IMAGE` before running the
+script when another cluster uses a different shared SIF path.
+
+### Automatic Illustrator Bundle Sync
+
+`sync_ai_bundles.sh` checks the BlueHive `toydata/tmp` directory for top-level
+folders containing an Illustrator file. For each new folder, it creates a
+two-way-safe Mutagen session with the matching folder under `~/Downloads`.
+The existing `final_paper_ai_linked` sessions remain separate.
+
+The launch agent runs the check every five minutes:
+
+```bash
+mkdir -p "$HOME/Library/Application Support/PaperAISync"
+install -m 755 sync_ai_bundles.sh \
+  "$HOME/Library/Application Support/PaperAISync/sync_ai_bundles.sh"
+launchctl bootstrap "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/com.gliao2.paper-ai-bundles.plist"
+```
+
+Run an immediate check with:
+
+```bash
+./sync_ai_bundles.sh
 ```
 
 ### Parameters
@@ -149,7 +213,8 @@ For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.
 - `-w NODE`: Specific node (optional)
 - `-n`: Disable logging
 - `--tool code|cursor`: Tunnel backend for `tunnel.sh` (default: `code`)
-- `--root PATH`: Override the remote tool root from `user_password.txt`
+- `-r, --root PATH`: Override the remote tool root from `user_password.txt`
+- `--opencodex`: Start OpenCodex in `screen` and restart Codex app-server after VNC SSH is ready
 
 
 ## Security Features

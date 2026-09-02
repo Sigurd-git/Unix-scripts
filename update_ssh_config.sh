@@ -99,6 +99,38 @@ else
     fi
 fi
 
+read_effective_ssh_value() {
+    local key="$1"
+
+    ssh -G "$COMPUTE_HOST" 2>/dev/null |
+        awk -v key="$key" '$1 == key { print $2; exit }'
+}
+
+current_hostname="$(read_effective_ssh_value hostname)"
+current_port="$(read_effective_ssh_value port)"
+control_path="$(read_effective_ssh_value controlpath)"
+
+if { [ "$current_hostname" != "$TARGET_NODE" ] || [ "$current_port" != "$PORT" ]; } &&
+   [[ "$control_path" == /* && "$control_path" != *%* && -S "$control_path" ]]; then
+    control_status="$(
+        ssh -S "$control_path" -O check "$COMPUTE_HOST" 2>&1 || true
+    )"
+    if [[ "$control_status" == *"Master running"* ]]; then
+        echo "Closing the previous SSH master for $COMPUTE_HOST."
+        ssh -S "$control_path" -O exit "$COMPUTE_HOST" >/dev/null 2>&1 || true
+        for _ in 1 2 3 4 5; do
+            [[ ! -S "$control_path" ]] && break
+            sleep 1
+        done
+        if [[ -S "$control_path" ]]; then
+            echo "Error: SSH master did not close: $control_path" >&2
+            exit 1
+        fi
+    else
+        unlink "$control_path"
+    fi
+fi
+
 update_host_value "$COMPUTE_HOST" "Hostname" "$TARGET_NODE"
 update_host_value "$COMPUTE_HOST" "Port" "$PORT"
 

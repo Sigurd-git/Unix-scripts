@@ -15,6 +15,7 @@ This directory stores:
 - `code`: VS Code standalone CLI, used by the default `code tunnel`
 - `cursor`: Cursor tunnel CLI, used by the optional `cursor tunnel`
 - `dropbear/`: user-space Dropbear SSHD, including `sbin/dropbear`, `bin/dropbearkey`, and server host keys
+- `remote-vnc/`: VNC launch files, private per-user state, and user-built images when the shared SIF is unavailable
 
 ## 1. Local Credential File
 
@@ -59,6 +60,7 @@ Deploy only selected tools:
 ./deploy_remote_tools.sh -a bluehive3 --code
 ./deploy_remote_tools.sh -a bluehive3 --cursor
 ./deploy_remote_tools.sh -a bluehive3 --dropbear
+./deploy_remote_tools.sh -a bluehive3 --vnc
 ```
 
 Use a non-default remote directory:
@@ -122,7 +124,43 @@ Start a Dropbear SSHD job and automatically update the local compute host SSH co
 
 The script first ensures remote Dropbear is deployed and host keys exist, then submits the `my_sshd` Slurm job. After startup, it reads the port and node from `~/logs/dropbear.log`, then calls `update_ssh_config.sh` to update `~/.ssh/config`.
 
-## 8. Verification
+## 8. Remote VNC
+
+VNC prefers this shared read-only image:
+
+```text
+/scratch/snormanh_lab/shared/remote-vnc/images/ubuntu-vnc-xfce-g3_24.04.sif
+```
+
+Start an independent VNC Slurm job:
+
+```bash
+./remote_vnc.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
+```
+
+The script checks for a SHA-256-named script release under
+`$REMOTE_SHARED_ROOT/remote-vnc/releases/` and copies it only when absent.
+Passwords, SSH keys, logs, and job state stay under:
+
+```text
+$REMOTE_SHARED_ROOT/remote-vnc/users/$USER/
+```
+
+`deploy_remote_tools.sh --vnc` and `--all` copy these files but do not build a
+SIF on the login node.
+
+If the shared SIF is unreadable or fails validation, the VNC job builds a
+private image inside its Slurm allocation from the pinned Apptainer definition.
+Override the writable remote root for one run with:
+
+```bash
+./remote_vnc.sh --root /path/you/can/write --no-open
+```
+
+After startup, `ssh blhc3` enters the same VNC Slurm allocation. Add
+`--opencodex` to start OpenCodex there and restart Codex app-server.
+
+## 9. Verification
 
 Check remote tools:
 
@@ -142,7 +180,13 @@ Check tunnel jobs:
 ssh bluehive3 'squeue -u "$USER" -O jobarrayid:18,name:32,nodelist:20,state:12'
 ```
 
-## 9. Common Issues
+Check the private VNC directory permissions:
+
+```bash
+ssh bluehive3 'stat -c "%a %n" /scratch/snormanh_lab/shared/remote-vnc/users/"$USER"'
+```
+
+## 10. Common Issues
 
 - If the remote host has neither `curl` nor `wget`, automatic VS Code/Cursor download fails. Ask the administrator to install one of them, or manually place the binary in the shared root.
 - If `known_hosts` reports that the Dropbear host key changed, that is expected after regenerating host keys. Remove the old host and port entry, then reconnect.

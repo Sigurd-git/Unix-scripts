@@ -15,6 +15,7 @@
 - `code`: VS Code standalone CLI，用于默认的 `code tunnel`
 - `cursor`: Cursor tunnel CLI，用于可选的 `cursor tunnel`
 - `dropbear/`: 用户态 Dropbear SSHD，包括 `sbin/dropbear`、`bin/dropbearkey` 和服务端 host keys
+- `remote-vnc/`: VNC 启动脚本、每位用户的私有状态，以及没有公共 SIF 时构建的用户镜像
 
 ## 1. 本地凭据文件
 
@@ -59,6 +60,7 @@ Host bluehive_compute3
 ./deploy_remote_tools.sh -a bluehive3 --code
 ./deploy_remote_tools.sh -a bluehive3 --cursor
 ./deploy_remote_tools.sh -a bluehive3 --dropbear
+./deploy_remote_tools.sh -a bluehive3 --vnc
 ```
 
 使用非默认远端目录：
@@ -122,7 +124,37 @@ Cursor tunnel 保留为显式选项：
 
 该脚本会先自动确保远端 Dropbear 已部署且 host keys 已生成，然后提交 `my_sshd` Slurm job。启动后会从 `~/logs/dropbear.log` 读取端口和节点，并调用 `update_ssh_config.sh` 写入 `~/.ssh/config`。
 
-## 8. 验证
+## 8. Remote VNC
+
+VNC 使用以下公共只读镜像：
+
+```text
+/scratch/snormanh_lab/shared/remote-vnc/images/ubuntu-vnc-xfce-g3_24.04.sif
+```
+
+启动一个独立的 VNC Slurm 作业：
+
+```bash
+./remote_vnc.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
+```
+
+脚本会在 `$REMOTE_SHARED_ROOT/remote-vnc/releases/` 检查带 SHA-256 的脚本版本。缺少时才会复制。密码、SSH 密钥、日志和作业状态保存在：
+
+```text
+$REMOTE_SHARED_ROOT/remote-vnc/users/$USER/
+```
+
+`deploy_remote_tools.sh --vnc` 和 `--all` 只复制这些文件，不会在登录节点构建 SIF。
+
+公共 SIF 无法读取或校验失败时，VNC 作业会在 Slurm 分配内用仓库附带的 Apptainer 定义构建用户镜像。可以为一次运行指定其他目录：
+
+```bash
+./remote_vnc.sh --root /path/you/can/write --no-open
+```
+
+启动完成后，`ssh blhc3` 会进入同一个 VNC Slurm 作业。加上 `--opencodex` 会在该作业内启动 OpenCodex 并重启 Codex app-server。
+
+## 9. 验证
 
 检查远端工具：
 
@@ -142,7 +174,13 @@ ssh bluehive3 'ls -l /scratch/snormanh_lab/shared/dropbear/.ssh'
 ssh bluehive3 'squeue -u "$USER" -O jobarrayid:18,name:32,nodelist:20,state:12'
 ```
 
-## 9. 常见问题
+检查 VNC 用户目录权限：
+
+```bash
+ssh bluehive3 'stat -c "%a %n" /scratch/snormanh_lab/shared/remote-vnc/users/"$USER"'
+```
+
+## 10. 常见问题
 
 - 如果远端没有 `curl` 或 `wget`，VS Code/Cursor 自动下载会失败，需要管理员先安装其中一个工具，或手工把二进制放到 shared root。
 - 如果 `known_hosts` 提示 Dropbear host key changed，这是重新生成 host key 后的正常现象。清理对应主机和端口的旧条目后重连。
