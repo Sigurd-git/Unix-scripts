@@ -14,11 +14,12 @@ time_hours=24
 requested_node=""
 root_override=""
 open_vnc_viewer=true
-start_opencodex=false
 restart_existing_job=false
 startup_timeout_seconds=300
 image_build_timeout_seconds=1800
-opencodex_startup_timeout_seconds=120
+environment_build_timeout_seconds=10800
+environment_name="default"
+environment_mode="mutable"
 
 start_ssh_control_script="${script_directory}/start_ssh_control.sh"
 read_user_password_script="${script_directory}/read_user_password.sh"
@@ -32,9 +33,11 @@ print_usage() {
     cat <<'EOF'
 Usage: remote_vnc.sh [options]
 
-Start or reuse an independent VNC Slurm job. The script also starts a
-public-key-only SSH service inside that allocation, updates the existing Mac
-SSH entry "blhc3", creates the VNC tunnel, and opens macOS Screen Sharing.
+Start or reuse an independent VNC Slurm job. A mutable job starts OpenCodex and
+Codex app-server in a job-scoped instance of its persistent Apptainer
+environment. The script also starts a public-key-only SSH service inside that
+allocation, updates the existing Mac SSH entry "blhc3", creates the VNC tunnel,
+and opens macOS Screen Sharing.
 
 The resource options match remote_sshd.sh. They apply when a new VNC job is
 submitted; an already-running VNC job is reused and its actual allocation is
@@ -49,8 +52,8 @@ Options:
   -t, --time HOURS           Time limit in hours for a new job (default: 24)
   -w, --node NODE            Request a specific compute node
   -r, --root PATH            Override REMOTE_SHARED_ROOT
-  --opencodex   Start ocx in a detached screen, then restart Codex app server
-                (default: off)
+  --env NAME                 Persistent environment name (default: default)
+  --immutable                Run the original read-only VNC image
   --restart     Replace the current VNC job with a newly managed job
   --no-open     Prepare SSH and VNC without opening Screen Sharing
   -h, --help    Show this help
@@ -128,8 +131,18 @@ while [[ $# -gt 0 ]]; do
             [[ -n "${root_override}" ]] || fail "--root requires a value"
             shift
             ;;
-        --opencodex)
-            start_opencodex=true
+        --env)
+            require_option_value "$1" "${2:-}"
+            environment_name="$2"
+            shift 2
+            ;;
+        --env=*)
+            environment_name="${1#*=}"
+            [[ -n "${environment_name}" ]] || fail "--env requires a value"
+            shift
+            ;;
+        --immutable)
+            environment_mode="immutable"
             shift
             ;;
         --no-open)
@@ -162,12 +175,14 @@ require_cluster "${cluster_name}" || exit 1
 [[ "${gpu_count}" =~ ^[0-9]+$ ]] || fail "GPUS must be a non-negative integer"
 [[ "${memory_gb}" =~ ^[1-9][0-9]*$ ]] || fail "MEMORY must be a positive integer"
 [[ "${time_hours}" =~ ^[1-9][0-9]*$ ]] || fail "HOURS must be a positive integer"
+[[ "${environment_name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
+    fail "invalid environment name: ${environment_name}"
 if [[ -n "${requested_node}" ]]; then
     [[ "${requested_node}" =~ ^[A-Za-z0-9._-]+$ ]] ||
         fail "invalid node name: ${requested_node}"
 fi
 
-for required_command in ssh scp ssh-keygen lsof awk sed mktemp launchctl plutil; do
+for required_command in ssh scp ssh-keygen lsof nc awk sed mktemp launchctl plutil; do
     command -v "${required_command}" >/dev/null 2>&1 ||
         fail "required command is unavailable: ${required_command}"
 done
@@ -206,7 +221,7 @@ launch_agent_file="${launch_agent_directory}/${launch_agent_label}.plist"
 launch_agent_stdout="${HOME}/Library/Logs/remote-vnc-${cluster_name}.out.log"
 launch_agent_stderr="${HOME}/Library/Logs/remote-vnc-${cluster_name}.err.log"
 remote_requested_node="${requested_node:-__REMOTE_VNC_SCHEDULER__}"
-managed_launcher_comment="remote-vnc-managed-v3"
+managed_launcher_comment="remote-vnc-managed-v6:${environment_name}:${environment_mode}"
 
 login_control_path="$(
     /usr/bin/ssh -G "${login_host_alias}" 2>/dev/null |
@@ -267,6 +282,7 @@ log_message \
     "Cluster=${cluster_name} partition=${partition_name} CPUs=${cpu_count}" \
     "GPUs=${gpu_count} memory=${memory_gb}G time=${time_hours}h" \
     "node=${requested_node:-scheduler}"
+log_message "Environment=${environment_name} mode=${environment_mode}"
 log_message "REMOTE_SHARED_ROOT=${REMOTE_SHARED_ROOT}"
 ensure_login_control_master
 
@@ -284,6 +300,8 @@ remote_job_launcher_file="${vnc_release_directory}/remote_vnc_job.sh"
 remote_helper_file="${vnc_release_directory}/remote_vnc_job_sshd.sh"
 remote_authorized_keys_file="${vnc_user_service_directory}/state/remote-vnc-authorized-key.pub"
 remote_key_temporary_file="${remote_authorized_keys_file}.tmp.$$"
+remote_bh_env_config_file="${vnc_user_service_directory}/state/bh-env-config.env"
+remote_bh_env_wrapper="${vnc_user_service_directory}/bin/bh-env"
 
 remote_tools_ssh_bash_args "${vnc_user_service_directory}" <<'REMOTE_PREPARE'
 set -Eeuo pipefail
@@ -293,8 +311,11 @@ private_directories=(
     "${user_service_directory}"
     "${user_service_directory}/state"
     "${user_service_directory}/state/jobs"
+    "${user_service_directory}/state/sbatch"
     "${user_service_directory}/logs"
     "${user_service_directory}/images"
+    "${user_service_directory}/environments"
+    "${user_service_directory}/bin"
 )
 mkdir -p "${private_directories[@]}"
 chmod 700 "${private_directories[@]}"
@@ -315,6 +336,79 @@ chmod 600 "${temporary_key_file}"
 mv "${temporary_key_file}" "${authorized_keys_file}"
 REMOTE_INSTALL_KEY
 
+remote_tools_ssh_bash_args \
+    "${vnc_release_directory}" \
+    "${vnc_user_service_directory}" \
+    "${remote_bh_env_config_file}" \
+    "${remote_bh_env_wrapper}" \
+    "default" \
+    "${shared_image_path}" \
+    "${environment_build_timeout_seconds}" <<'REMOTE_INSTALL_BH_ENV'
+set -Eeuo pipefail
+release_directory="$1"
+user_service_directory="$2"
+config_file="$3"
+wrapper_file="$4"
+default_environment_name="$5"
+base_image_path="$6"
+environment_build_timeout_seconds="$7"
+bh_env_script="${release_directory}/bh-env.sh"
+
+[[ -x "${bh_env_script}" ]] || {
+    printf 'bh-env release script is missing: %s\n' "${bh_env_script}" >&2
+    exit 2
+}
+mkdir -p \
+    "${user_service_directory}/bin" \
+    "$(dirname "${config_file}")" \
+    "${HOME}/.local/bin"
+chmod 700 \
+    "${user_service_directory}/bin" \
+    "$(dirname "${config_file}")" \
+    "${HOME}/.local/bin" 2>/dev/null || true
+
+temporary_config_file="${config_file}.tmp.$$"
+{
+    printf 'BH_ENV_RELEASE_DIRECTORY=%q\n' "${release_directory}"
+    printf 'BH_ENV_USER_SERVICE_DIRECTORY=%q\n' "${user_service_directory}"
+    printf 'BH_ENV_DEFAULT_NAME=%q\n' "${default_environment_name}"
+    printf 'BH_ENV_BASE_IMAGE=%q\n' "${base_image_path}"
+    printf 'BH_ENV_BUILD_TIMEOUT_SECONDS=%q\n' \
+        "${environment_build_timeout_seconds}"
+} > "${temporary_config_file}"
+chmod 600 "${temporary_config_file}"
+mv "${temporary_config_file}" "${config_file}"
+
+temporary_wrapper_file="${wrapper_file}.tmp.$$"
+{
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -Eeuo pipefail\n'
+    printf 'exec %q --config %q "$@"\n' "${bh_env_script}" "${config_file}"
+} > "${temporary_wrapper_file}"
+chmod 700 "${temporary_wrapper_file}"
+mv "${temporary_wrapper_file}" "${wrapper_file}"
+
+home_command="${HOME}/.local/bin/bh-env"
+if [[ ! -e "${home_command}" && ! -L "${home_command}" ]]; then
+    ln -s "${wrapper_file}" "${home_command}"
+elif [[ -L "${home_command}" ]]; then
+    existing_target="$(readlink "${home_command}")"
+    case "${existing_target}" in
+        */remote-vnc/users/*/bin/bh-env|"${wrapper_file}")
+            ln -sfn "${wrapper_file}" "${home_command}"
+            ;;
+        *)
+            printf '[remote-vnc] Existing bh-env symlink was left unchanged: %s -> %s\n' \
+                "${home_command}" "${existing_target}" >&2
+            ;;
+    esac
+else
+    printf '[remote-vnc] Existing file was left unchanged: %s\n' \
+        "${home_command}" >&2
+    printf '[remote-vnc] Use %s directly.\n' "${wrapper_file}" >&2
+fi
+REMOTE_INSTALL_BH_ENV
+
 ready_record="$(
     remote_tools_ssh_bash_args \
         "${vnc_release_directory}" \
@@ -332,7 +426,10 @@ ready_record="$(
         "${remote_helper_file}" \
         "${remote_authorized_keys_file}" \
         "${managed_launcher_comment}" \
-        "${restart_existing_job}" <<'REMOTE_START'
+        "${restart_existing_job}" \
+        "${environment_name}" \
+        "${environment_mode}" \
+        "${environment_build_timeout_seconds}" <<'REMOTE_START'
 set -Eeuo pipefail
 
 release_directory="$1"
@@ -351,11 +448,28 @@ remote_helper_file="${13}"
 remote_authorized_keys_file="${14}"
 managed_launcher_comment="${15}"
 restart_existing_job="${16}"
-managed_launcher_version="3"
+environment_name="${17}"
+environment_mode="${18}"
+environment_build_timeout_seconds="${19}"
+managed_launcher_version="6"
 
 if [[ "${requested_node}" == "__REMOTE_VNC_SCHEDULER__" ]]; then
     requested_node=""
 fi
+[[ "${environment_name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+    printf 'Invalid environment name: %s\n' "${environment_name}" >&2
+    exit 2
+}
+[[ "${environment_mode}" == "mutable" ||
+   "${environment_mode}" == "immutable" ]] || {
+    printf 'Invalid environment mode: %s\n' "${environment_mode}" >&2
+    exit 2
+}
+[[ "${environment_build_timeout_seconds}" =~ ^[1-9][0-9]*$ ]] || {
+    printf 'Invalid environment build timeout: %s\n' \
+        "${environment_build_timeout_seconds}" >&2
+    exit 2
+}
 
 slurm_binary_directory="/sfw/rhel9-x86_64/slurm/24.05.0.b1/bin"
 squeue_executable="${slurm_binary_directory}/squeue"
@@ -370,6 +484,12 @@ connection_file="${user_service_directory}/state/connection.env"
 for required_file in \
     "${release_directory}/start_vnc.sh" \
     "${release_directory}/build_vnc_image.sh" \
+    "${release_directory}/bh-env.sh" \
+    "${release_directory}/environment_common.sh" \
+    "${release_directory}/prepare_environment.sh" \
+    "${release_directory}/provision_environment.sh" \
+    "${release_directory}/environment-packages.txt" \
+    "${release_directory}/matlab-products.txt" \
     "${release_directory}/ubuntu-vnc-xfce-g3_24.04.def" \
     "${release_directory}/ubuntu-vnc-xfce-g3_24.04.sha256" \
     "${remote_job_launcher_file}" \
@@ -431,7 +551,7 @@ job_uses_managed_launcher() {
         tr ' ' '\n' <<< "${job_record}" |
             awk -F= '$1 == "Comment" { print $2; exit }'
     )"
-    [[ "${job_comment}" == "${managed_launcher_comment}" ]]
+    [[ "${job_comment}" == remote-vnc-managed-v6:* ]]
 }
 
 managed_launcher_is_ready() {
@@ -442,8 +562,59 @@ managed_launcher_is_ready() {
     [[ "$(read_state_value "${launcher_state_file}" STATUS || true)" == "READY" ]] &&
         [[ "$(read_state_value "${launcher_state_file}" LAUNCHER_VERSION || true)" == \
            "${managed_launcher_version}" ]] &&
-        [[ "$(read_state_value "${launcher_state_file}" JOB_ID || true)" == \
-           "${requested_job_id}" ]]
+       [[ "$(read_state_value "${launcher_state_file}" JOB_ID || true)" == \
+           "${requested_job_id}" ]] &&
+       [[ "$(read_state_value "${launcher_state_file}" ENVIRONMENT_NAME || true)" == \
+           "${environment_name}" ]] &&
+       [[ "$(read_state_value "${launcher_state_file}" ENVIRONMENT_MODE || true)" == \
+           "${environment_mode}" ]]
+}
+
+job_matches_requested_environment() {
+    local requested_job_id="$1"
+    local launcher_state_file
+    local job_record
+    local job_comment
+
+    launcher_state_file="$(managed_launcher_state_file "${requested_job_id}")"
+    if [[ "$(read_state_value "${launcher_state_file}" ENVIRONMENT_NAME || true)" == \
+          "${environment_name}" ]] &&
+       [[ "$(read_state_value "${launcher_state_file}" ENVIRONMENT_MODE || true)" == \
+          "${environment_mode}" ]]; then
+        return 0
+    fi
+
+    job_record="$(
+        "${scontrol_executable}" show job -o "${requested_job_id}" 2>/dev/null || true
+    )"
+    job_comment="$(
+        tr ' ' '\n' <<< "${job_record}" |
+            awk -F= '$1 == "Comment" { print $2; exit }'
+    )"
+    [[ "${job_comment}" == "${managed_launcher_comment}" ]]
+}
+
+opencodex_connection_is_ready() {
+    if [[ "${environment_mode}" == "immutable" ]]; then
+        [[ "$(read_state_value "${connection_file}" OPENCODEX_STATUS || true)" == \
+           "DISABLED_IMMUTABLE" ]]
+        return
+    fi
+
+    [[ "$(read_state_value "${connection_file}" OPENCODEX_STATUS || true)" == \
+       "READY" ]] &&
+        [[ "$(read_state_value "${connection_file}" CONTAINER_INSTANCE_NAME || true)" =~ \
+           ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] &&
+        [[ "$(read_state_value "${connection_file}" CONTAINER_INSTANCE_PID || true)" =~ \
+           ^[0-9]+$ ]] &&
+        [[ "$(read_state_value "${connection_file}" OPENCODEX_PID || true)" =~ \
+           ^[0-9]+$ ]] &&
+        [[ "$(read_state_value "${connection_file}" OPENCODEX_PORT || true)" =~ \
+           ^[0-9]+$ ]] &&
+        [[ "$(read_state_value "${connection_file}" CODEX_APP_SERVER_STATUS || true)" == \
+           "running" ]] &&
+        [[ "$(read_state_value "${connection_file}" CODEX_APP_SERVER_PID || true)" =~ \
+           ^[0-9]+$ ]]
 }
 
 vnc_connection_is_ready() {
@@ -458,6 +629,11 @@ vnc_connection_is_ready() {
         [[ "$(read_state_value "${connection_file}" JOB_ID || true)" == "${requested_job_id}" ]] &&
         [[ "$(read_state_value "${connection_file}" NODE || true)" =~ ^[A-Za-z0-9._-]+$ ]] &&
         [[ "$(read_state_value "${connection_file}" VNC_PORT || true)" =~ ^[0-9]+$ ]] &&
+        [[ "$(read_state_value "${connection_file}" ENVIRONMENT_NAME || true)" == \
+           "${environment_name}" ]] &&
+        [[ "$(read_state_value "${connection_file}" ENVIRONMENT_MODE || true)" == \
+           "${environment_mode}" ]] &&
+        opencodex_connection_is_ready &&
         managed_launcher_is_ready "${requested_job_id}" &&
         [[ "${job_state}" == "RUNNING" ]]
 }
@@ -503,11 +679,42 @@ else
             }
             active_job_record=""
         elif job_uses_managed_launcher "${job_id}"; then
-            printf '[remote-vnc] Waiting for existing VNC Job %s.\n' \
-                "${job_id}" >&2
+            if job_matches_requested_environment "${job_id}"; then
+                printf '[remote-vnc] Waiting for existing VNC Job %s.\n' \
+                    "${job_id}" >&2
+            else
+                active_environment_name="$(
+                    read_state_value \
+                        "$(managed_launcher_state_file "${job_id}")" \
+                        ENVIRONMENT_NAME || true
+                )"
+                active_environment_mode="$(
+                    read_state_value \
+                        "$(managed_launcher_state_file "${job_id}")" \
+                        ENVIRONMENT_MODE || true
+                )"
+                printf 'VNC Job %s uses environment %s (%s).\n' \
+                    "${job_id}" \
+                    "${active_environment_name:-unknown}" \
+                    "${active_environment_mode:-unknown}" >&2
+                printf 'Run remote_vnc.sh --restart with the requested environment.\n' \
+                    >&2
+                exit 7
+            fi
         else
-            printf 'VNC Job %s was started without the managed SSH service.\n' \
-                "${job_id}" >&2
+            existing_launcher_version="$(
+                read_state_value \
+                    "$(managed_launcher_state_file "${job_id}")" \
+                    LAUNCHER_VERSION || true
+            )"
+            if [[ -n "${existing_launcher_version}" ]]; then
+                printf 'VNC Job %s uses launcher version %s; version %s is required.\n' \
+                    "${job_id}" "${existing_launcher_version}" \
+                    "${managed_launcher_version}" >&2
+            else
+                printf 'VNC Job %s was started without the current managed launcher.\n' \
+                    "${job_id}" >&2
+            fi
             printf 'Run remote_vnc.sh --restart with the same resource options to replace it.\n' \
                 >&2
             exit 7
@@ -551,7 +758,7 @@ else
 
         mkdir -p "${user_service_directory}/logs"
         printf -v job_wrap_command \
-            'exec %q %q %q %q %q %q %q %q' \
+            'exec %q %q %q %q %q %q %q %q %q %q %q' \
             "${remote_job_launcher_file}" \
             "${release_directory}" \
             "${user_service_directory}" \
@@ -559,7 +766,10 @@ else
             "${remote_helper_file}" \
             "${remote_authorized_keys_file}" \
             "${startup_timeout_seconds}" \
-            "${image_build_timeout_seconds}"
+            "${image_build_timeout_seconds}" \
+            "${environment_name}" \
+            "${environment_mode}" \
+            "${environment_build_timeout_seconds}"
         job_id="$(
             "${sbatch_executable}" "${submit_options[@]}" \
                 --wrap="${job_wrap_command}"
@@ -572,7 +782,10 @@ else
         printf '[remote-vnc] Submitted VNC Job %s.\n' "${job_id}" >&2
     fi
 
-    wait_deadline=$((SECONDS + image_build_timeout_seconds + startup_timeout_seconds))
+    wait_deadline=$((
+        SECONDS + image_build_timeout_seconds +
+        environment_build_timeout_seconds + startup_timeout_seconds
+    ))
     last_job_description=""
     last_launcher_stage=""
     while ((SECONDS < wait_deadline)); do
@@ -601,10 +814,16 @@ else
         launcher_stage="$(read_state_value "${launcher_state_file}" STATUS || true)"
         image_status_file="${user_service_directory}/state/jobs/${job_id}/image-status"
         image_stage="$(head -n 1 "${image_status_file}" 2>/dev/null || true)"
-        reported_stage="${launcher_stage:-${image_stage:-WAITING_FOR_JOB}}"
+        environment_status_file="${user_service_directory}/state/jobs/${job_id}/environment-status"
+        environment_stage="$(
+            head -n 1 "${environment_status_file}" 2>/dev/null || true
+        )"
+        reported_stage="${launcher_stage:-${environment_stage:-${image_stage:-WAITING_FOR_JOB}}}"
         if [[ "${image_stage}" == "BUILDING_IMAGE" ||
               "${launcher_stage}" == "CHECKING_IMAGE" ]]; then
             reported_stage="${image_stage:-${launcher_stage}}"
+        elif [[ "${launcher_stage}" == "PREPARING_ENVIRONMENT" ]]; then
+            reported_stage="${environment_stage:-${launcher_stage}}"
         fi
         if [[ "${reported_stage}" != "${last_launcher_stage}" ]]; then
             printf '[remote-vnc] Job %s stage=%s\n' \
@@ -619,7 +838,7 @@ else
     done
     vnc_connection_is_ready "${job_id}" || {
         printf 'Timed out after %s seconds waiting for VNC Job %s.\n' \
-            "$((image_build_timeout_seconds + startup_timeout_seconds))" \
+            "$((image_build_timeout_seconds + environment_build_timeout_seconds + startup_timeout_seconds))" \
             "${job_id}" >&2
         exit 5
     }
@@ -721,21 +940,79 @@ host_key_public_file="$(
     exit 6
 }
 
-printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+active_environment_name="$(read_state_value "${connection_file}" ENVIRONMENT_NAME)"
+active_environment_mode="$(read_state_value "${connection_file}" ENVIRONMENT_MODE)"
+active_environment_generation="$(
+    read_state_value "${connection_file}" ENVIRONMENT_GENERATION
+)"
+active_container_instance_name="$(
+    read_state_value "${connection_file}" CONTAINER_INSTANCE_NAME
+)"
+active_container_instance_process_id="$(
+    read_state_value "${connection_file}" CONTAINER_INSTANCE_PID
+)"
+active_opencodex_status="$(
+    read_state_value "${connection_file}" OPENCODEX_STATUS
+)"
+active_opencodex_process_id="$(
+    read_state_value "${connection_file}" OPENCODEX_PID
+)"
+active_opencodex_port="$(
+    read_state_value "${connection_file}" OPENCODEX_PORT
+)"
+active_opencodex_migration_status="$(
+    read_state_value "${connection_file}" OPENCODEX_MIGRATION_STATUS
+)"
+active_codex_app_server_status="$(
+    read_state_value "${connection_file}" CODEX_APP_SERVER_STATUS
+)"
+active_codex_app_server_process_id="$(
+    read_state_value "${connection_file}" CODEX_APP_SERVER_PID
+)"
+[[ "${active_environment_name}" == "${environment_name}" &&
+   "${active_environment_mode}" == "${environment_mode}" ]] || {
+    printf 'VNC environment state does not match the request.\n' >&2
+    exit 6
+}
+
+printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "${job_id}" "${vnc_node}" "${vnc_port}" "${remote_ssh_port}" \
     "${host_key_public_file}" "${actual_partition}" "${actual_cpu_count}" \
-    "${actual_gpu_count}" "${actual_memory}" "${actual_time_limit}"
+    "${actual_gpu_count}" "${actual_memory}" "${actual_time_limit}" \
+    "${active_environment_name}" "${active_environment_mode}" \
+    "${active_environment_generation}" "${active_container_instance_name}" \
+    "${active_container_instance_process_id}" "${active_opencodex_status}" \
+    "${active_opencodex_process_id}" "${active_opencodex_port}" \
+    "${active_opencodex_migration_status}" \
+    "${active_codex_app_server_status}" \
+    "${active_codex_app_server_process_id}"
 REMOTE_START
 )" || fail "remote VNC startup failed"
 
 IFS='|' read -r \
     vnc_job_id vnc_node remote_vnc_port remote_ssh_port \
     host_key_public_file actual_partition actual_cpu_count actual_gpu_count \
-    actual_memory actual_time_limit <<< "${ready_record}"
+    actual_memory actual_time_limit active_environment_name \
+    active_environment_mode active_environment_generation \
+    active_container_instance_name active_container_instance_process_id \
+    active_opencodex_status active_opencodex_process_id active_opencodex_port \
+    active_opencodex_migration_status active_codex_app_server_status \
+    active_codex_app_server_process_id <<< "${ready_record}"
 [[ "${vnc_job_id}" =~ ^[0-9]+$ ]] || fail "invalid VNC Job ID: ${vnc_job_id}"
 [[ "${vnc_node}" =~ ^[A-Za-z0-9._-]+$ ]] || fail "invalid VNC node: ${vnc_node}"
 [[ "${remote_vnc_port}" =~ ^[0-9]+$ ]] || fail "invalid VNC port: ${remote_vnc_port}"
 [[ "${remote_ssh_port}" =~ ^[0-9]+$ ]] || fail "invalid SSH port: ${remote_ssh_port}"
+[[ "${active_environment_name}" == "${environment_name}" ]] ||
+    fail "active environment name does not match: ${active_environment_name}"
+[[ "${active_environment_mode}" == "${environment_mode}" ]] ||
+    fail "active environment mode does not match: ${active_environment_mode}"
+if [[ "${active_environment_mode}" == "mutable" ]]; then
+    [[ "${active_container_instance_name}" =~ \
+       ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
+        fail "invalid container service instance: ${active_container_instance_name}"
+    [[ "${active_container_instance_process_id}" =~ ^[0-9]+$ ]] ||
+        fail "invalid container service instance PID: ${active_container_instance_process_id}"
+fi
 
 server_host_key="$(
     remote_tools_ssh_bash_args "${host_key_public_file}" <<'REMOTE_HOST_KEY'
@@ -821,6 +1098,33 @@ listener_uses_ssh_master() {
     return 1
 }
 
+read_local_rfb_banner() {
+    local requested_port="$1"
+    local rfb_banner=""
+
+    rfb_banner="$(
+        /usr/bin/nc -G 3 -w 1 127.0.0.1 "${requested_port}" 2>/dev/null |
+            /usr/bin/head -c 12
+    )" || true
+    printf '%s' "${rfb_banner}"
+}
+
+local_vnc_rfb_is_ready() {
+    local requested_port="$1"
+
+    [[ "$(read_local_rfb_banner "${requested_port}")" == RFB\ * ]]
+}
+
+wait_for_local_vnc_rfb() {
+    local requested_port="$1"
+
+    for _ in {1..30}; do
+        local_vnc_rfb_is_ready "${requested_port}" && return 0
+        sleep 1
+    done
+    return 1
+}
+
 read_local_state_value() {
     local requested_key="$1"
 
@@ -895,13 +1199,15 @@ if [[ "${master_check_output}" == *"Master running"* ]]; then
         if [[ "${saved_job_id}" == "${vnc_job_id}" &&
               "${saved_remote_vnc_port}" == "${remote_vnc_port}" &&
               "${saved_local_vnc_port}" =~ ^[0-9]+$ ]] &&
-           listener_uses_ssh_master "${saved_local_vnc_port}"; then
+           listener_uses_ssh_master "${saved_local_vnc_port}" &&
+           local_vnc_rfb_is_ready "${saved_local_vnc_port}"; then
             local_vnc_port="${saved_local_vnc_port}"
         else
             for ((candidate_port = remote_vnc_port + 10000;
                   candidate_port <= remote_vnc_port + 10050;
                   candidate_port++)); do
-                if listener_uses_ssh_master "${candidate_port}"; then
+                if listener_uses_ssh_master "${candidate_port}" &&
+                   local_vnc_rfb_is_ready "${candidate_port}"; then
                     local_vnc_port="${candidate_port}"
                     break
                 fi
@@ -1019,14 +1325,19 @@ if [[ -z "${local_vnc_port}" ]]; then
 fi
 listener_uses_ssh_master "${local_vnc_port}" ||
     fail "SSH did not listen on local VNC port ${local_vnc_port}"
+wait_for_local_vnc_rfb "${local_vnc_port}" || {
+    tail -n 80 "${launch_agent_stderr}" >&2 2>/dev/null || true
+    fail "local VNC tunnel on port ${local_vnc_port} did not return an RFB banner"
+}
 
 validation_record="$(
     /usr/bin/ssh \
         -o BatchMode=yes \
         -o ConnectTimeout=15 \
         "${vnc_ssh_alias}" \
-        /bin/bash -s <<'REMOTE_VALIDATE'
+        /bin/bash -s -- "${REMOTE_SHARED_ROOT}" <<'REMOTE_VALIDATE'
 set -Eeuo pipefail
+remote_shared_root="$1"
 printf 'JOB_ID=%s\n' "${SLURM_JOB_ID:-}"
 printf 'NODE=%s\n' "$(hostname -s)"
 printf 'CPUS=%s\n' "${SLURM_CPUS_PER_TASK:-}"
@@ -1034,7 +1345,7 @@ printf 'CUDA=%s\n' "${CUDA_VISIBLE_DEVICES:-}"
 printf 'CGROUP='
 tr '\n' ';' < "/proc/$$/cgroup"
 printf '\n'
-[[ -d /scratch/snormanh_lab/shared ]] && printf 'DATA=available\n'
+[[ -d "${remote_shared_root}" ]] && printf 'DATA=available\n'
 [[ -x /gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2024b/bin/matlab ]] &&
     printf 'MATLAB=available\n'
 type module >/dev/null 2>&1 && printf 'MODULE=available\n'
@@ -1052,217 +1363,49 @@ validation_cgroup="$(awk -F= '$1 == "CGROUP" { sub(/^[^=]*=/, ""); print; exit }
 [[ "${validation_cgroup}" == *"/job_${vnc_job_id}/step_batch/"* ]] ||
     fail "SSH shell is outside the batch Step cgroup for Job ${vnc_job_id}"
 grep -q '^DATA=available$' <<< "${validation_record}" ||
-    fail "the SSH shell cannot access /scratch/snormanh_lab/shared"
+    fail "the SSH shell cannot access ${REMOTE_SHARED_ROOT}"
 
-if [[ "${start_opencodex}" == "true" ]]; then
-    log_message "Starting OpenCodex inside Job ${vnc_job_id}..."
-    opencodex_record="$(
+if [[ "${active_environment_mode}" == "mutable" ]]; then
+    environment_validation_record="$(
         /usr/bin/ssh \
             -o BatchMode=yes \
             -o ConnectTimeout=15 \
             "${vnc_ssh_alias}" \
-            /bin/bash -s -- \
-            "${vnc_job_id}" \
-            "${vnc_node}" \
-            "${opencodex_startup_timeout_seconds}" \
-            "${vnc_ssh_alias}" <<'REMOTE_OPENCODEX'
+            /bin/bash -s -- "${active_environment_name}" <<'REMOTE_ENVIRONMENT_VALIDATE'
 set -Eeuo pipefail
-
-expected_job_id="$1"
-expected_node="$2"
-startup_timeout_seconds="$3"
-ssh_alias="$4"
-
-[[ "${SLURM_JOB_ID:-}" == "${expected_job_id}" ]] || {
-    printf 'OpenCodex shell entered Job %s, expected %s\n' \
-        "${SLURM_JOB_ID:-unknown}" "${expected_job_id}" >&2
-    exit 2
-}
-[[ "$(hostname -s)" == "${expected_node}" ]] || {
-    printf 'OpenCodex shell reached %s, expected %s\n' \
-        "$(hostname -s)" "${expected_node}" >&2
-    exit 2
-}
-shell_cgroup="$(tr '\n' ';' < "/proc/$$/cgroup")"
-[[ "${shell_cgroup}" == *"/job_${expected_job_id}/step_batch/"* ]] || {
-    printf 'OpenCodex shell is outside the batch Step cgroup for Job %s\n' \
-        "${expected_job_id}" >&2
-    exit 2
-}
-
-for required_command in screen ocx pgrep; do
-    command -v "${required_command}" >/dev/null 2>&1 || {
-        printf 'Required remote command is unavailable: %s\n' \
-            "${required_command}" >&2
-        exit 2
-    }
-done
-
-ocx_executable="$(command -v ocx)"
-codex_home_directory="${CODEX_HOME:-${HOME}/.codex}"
-managed_codex_executable="${codex_home_directory}/packages/standalone/current/codex"
-[[ -x "${managed_codex_executable}" ]] || {
-    printf 'Managed Codex executable is unavailable: %s\n' \
-        "${managed_codex_executable}" >&2
-    exit 2
-}
-
-screen_session_name="remote-vnc-opencodex-${expected_job_id}"
-
-screen_session_exists() {
-    screen -ls 2>/dev/null | awk -v requested_name="${screen_session_name}" '
-        $1 ~ /^[0-9]+\./ && index($0, "(Dead") == 0 {
-            first_dot = index($1, ".")
-            if (substr($1, first_dot + 1) == requested_name) {
-                found = 1
-            }
-        }
-        END { exit found ? 0 : 1 }
-    '
-}
-
-ready_record=""
-screen_action="existing proxy"
-if ! ready_record="$("${ocx_executable}" ready --json 2>/dev/null)"; then
-    screen -wipe "${screen_session_name}" >/dev/null 2>&1 || true
-    if screen_session_exists; then
-        screen_action="existing screen"
-    else
-        screen -h 10000 -dmS "${screen_session_name}" \
-            /bin/bash -c 'exec "$1" start </dev/null' \
-            remote-vnc-opencodex "${ocx_executable}"
-        screen_action="new screen"
-
-        for _ in {1..10}; do
-            screen_session_exists && break
-            sleep 0.2
+environment_name="$1"
+bh_env_executable="${HOME}/.local/bin/bh-env"
+[[ -x "${bh_env_executable}" ]]
+"${bh_env_executable}" --env "${environment_name}" exec -- \
+    /bin/bash -c '
+        set -Eeuo pipefail
+        for command_name in gcc g++ node npm ocx codex uv pixi nvcc \
+            google-chrome-stable \
+            chatgpt matlab mpm vncserver; do
+            command -v "${command_name}" >/dev/null
         done
-        screen_session_exists || {
-            printf 'OpenCodex screen exited during startup: %s\n' \
-                "${screen_session_name}" >&2
-            exit 3
-        }
-    fi
-
-    startup_deadline=$((SECONDS + startup_timeout_seconds))
-    while (( SECONDS < startup_deadline )); do
-        if ready_record="$("${ocx_executable}" ready --json 2>/dev/null)"; then
-            break
-        fi
-        screen_session_exists || {
-            printf 'OpenCodex screen exited before the proxy became ready: %s\n' \
-                "${screen_session_name}" >&2
-            exit 3
-        }
-        sleep 1
-    done
-elif screen_session_exists; then
-    screen_action="existing screen"
-fi
-
-[[ -n "${ready_record}" ]] &&
-    grep -Eq '"ready"[[:space:]]*:[[:space:]]*true' <<< "${ready_record}" || {
-        printf 'OpenCodex did not become ready within %s seconds. Inspect it with: screen -r %s\n' \
-            "${startup_timeout_seconds}" "${screen_session_name}" >&2
-        exit 3
-    }
-
-proxy_process_id="$(
-    sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
-        <<< "${ready_record}"
-)"
-proxy_port="$(
-    sed -n 's/.*"port":[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
-        <<< "${ready_record}"
-)"
-[[ "${proxy_process_id}" =~ ^[0-9]+$ ]] &&
-    [[ -r "/proc/${proxy_process_id}/cgroup" ]] || {
-        printf 'Could not determine the OpenCodex proxy process\n' >&2
-        exit 3
-    }
-proxy_cgroup="$(tr '\n' ';' < "/proc/${proxy_process_id}/cgroup")"
-[[ "${proxy_cgroup}" == *"/job_${expected_job_id}/step_batch/"* ]] || {
-    printf 'OpenCodex proxy PID %s is outside Job %s; stop that proxy and rerun this command\n' \
-        "${proxy_process_id}" "${expected_job_id}" >&2
-    exit 3
-}
-
-"${managed_codex_executable}" app-server daemon restart >/dev/null || {
-    printf 'codex app-server daemon restart failed\n' >&2
-    exit 4
-}
-
-find_managed_app_server_process_id() {
-    local candidate_process_id
-    local command_line
-    local selected_process_id=""
-
-    while IFS= read -r candidate_process_id; do
-        [[ -r "/proc/${candidate_process_id}/cmdline" ]] || continue
-        command_line="$(
-            tr '\0' ' ' < "/proc/${candidate_process_id}/cmdline" 2>/dev/null || true
-        )"
-        if [[ "${command_line}" == \
-            "${managed_codex_executable} app-server --remote-control --listen unix://"* ]]; then
-            selected_process_id="${candidate_process_id}"
-        fi
-    done < <(pgrep -u "$(id -u)" -x codex || true)
-
-    [[ -n "${selected_process_id}" ]] || return 1
-    printf '%s\n' "${selected_process_id}"
-}
-
-daemon_record=""
-app_server_process_id=""
-app_server_cgroup=""
-for _ in {1..30}; do
-    daemon_record="$(
-        "${managed_codex_executable}" app-server daemon version 2>/dev/null || true
+        test -d /gpfs/fs1
+        test -d /gpfs/fs2
+        test -d /scratch
+        test -d /bluehive-home
+        printf "ENVIRONMENT_OK user=%s job=%s\n" \
+            "$(id -un)" "${SLURM_JOB_ID:-missing}"
+        printf "CGROUP="
+        tr "\n" ";" < /proc/self/cgroup
+        printf "\n"
+    '
+REMOTE_ENVIRONMENT_VALIDATE
+    )" || fail "the mutable Apptainer environment failed validation"
+    grep -q "^ENVIRONMENT_OK user=${remote_user_name} job=${vnc_job_id}$" \
+        <<< "${environment_validation_record}" ||
+        fail "the mutable environment returned an invalid identity"
+    environment_validation_cgroup="$(
+        awk -F= '$1 == "CGROUP" { sub(/^[^=]*=/, ""); print; exit }' \
+            <<< "${environment_validation_record}"
     )"
-    if grep -Eq '"status"[[:space:]]*:[[:space:]]*"running"' \
-        <<< "${daemon_record}"; then
-        app_server_process_id="$(find_managed_app_server_process_id || true)"
-        if [[ "${app_server_process_id}" =~ ^[0-9]+$ ]] &&
-           [[ -r "/proc/${app_server_process_id}/cgroup" ]]; then
-            app_server_cgroup="$(
-                tr '\n' ';' < "/proc/${app_server_process_id}/cgroup"
-            )"
-            [[ "${app_server_cgroup}" == \
-                *"/job_${expected_job_id}/step_batch/"* ]] && break
-        fi
-    fi
-    sleep 1
-done
-
-grep -Eq '"status"[[:space:]]*:[[:space:]]*"running"' \
-    <<< "${daemon_record}" || {
-        printf 'Codex app server did not report running after restart\n' >&2
-        exit 4
-    }
-[[ "${app_server_process_id}" =~ ^[0-9]+$ ]] &&
-    [[ "${app_server_cgroup}" == *"/job_${expected_job_id}/step_batch/"* ]] || {
-        printf 'Codex app server is outside the batch Step cgroup for Job %s\n' \
-            "${expected_job_id}" >&2
-        exit 4
-    }
-
-printf 'OpenCodex: ready on port %s (PID %s, %s)\n' \
-    "${proxy_port:-unknown}" "${proxy_process_id}" "${screen_action}"
-printf 'Codex app server: running (PID %s)\n' \
-    "${app_server_process_id}"
-if screen_session_exists; then
-    printf 'OpenCodex screen: ssh -t %s screen -r %s\n' \
-        "${ssh_alias}" "${screen_session_name}"
-else
-    printf 'OpenCodex screen: reused a proxy without session %s\n' \
-        "${screen_session_name}"
-fi
-REMOTE_OPENCODEX
-    )" || fail "could not start OpenCodex and restart the Codex app server"
-
-    while IFS= read -r opencodex_line; do
-        [[ -n "${opencodex_line}" ]] && log_message "${opencodex_line}"
-    done <<< "${opencodex_record}"
+    [[ "${environment_validation_cgroup}" == \
+       *"/job_${vnc_job_id}/step_batch/"* ]] ||
+        fail "the mutable environment is outside the VNC batch Step cgroup"
 fi
 
 local_state_temporary_file="$(mktemp "${local_connection_state_file}.XXXXXX")"
@@ -1274,6 +1417,22 @@ local_state_temporary_file="$(mktemp "${local_connection_state_file}.XXXXXX")"
     printf 'LOCAL_VNC_PORT=%s\n' "${local_vnc_port}"
     printf 'REMOTE_SHARED_ROOT=%s\n' "${REMOTE_SHARED_ROOT}"
     printf 'REMOTE_VNC_USER_DIRECTORY=%s\n' "${vnc_user_service_directory}"
+    printf 'ENVIRONMENT_NAME=%s\n' "${active_environment_name}"
+    printf 'ENVIRONMENT_MODE=%s\n' "${active_environment_mode}"
+    printf 'ENVIRONMENT_GENERATION=%s\n' "${active_environment_generation}"
+    printf 'CONTAINER_INSTANCE_NAME=%s\n' \
+        "${active_container_instance_name}"
+    printf 'CONTAINER_INSTANCE_PID=%s\n' \
+        "${active_container_instance_process_id}"
+    printf 'OPENCODEX_STATUS=%s\n' "${active_opencodex_status}"
+    printf 'OPENCODEX_PID=%s\n' "${active_opencodex_process_id}"
+    printf 'OPENCODEX_PORT=%s\n' "${active_opencodex_port}"
+    printf 'OPENCODEX_MIGRATION_STATUS=%s\n' \
+        "${active_opencodex_migration_status}"
+    printf 'CODEX_APP_SERVER_STATUS=%s\n' \
+        "${active_codex_app_server_status}"
+    printf 'CODEX_APP_SERVER_PID=%s\n' \
+        "${active_codex_app_server_process_id}"
 } > "${local_state_temporary_file}"
 chmod 600 "${local_state_temporary_file}"
 mv "${local_state_temporary_file}" "${local_connection_state_file}"
@@ -1284,6 +1443,22 @@ log_message \
     "CPUs=${actual_cpu_count} GPUs=${actual_gpu_count}" \
     "memory=${actual_memory} time=${actual_time_limit}"
 log_message "Compute shell: ssh ${vnc_ssh_alias}"
+if [[ "${active_environment_mode}" == "mutable" ]]; then
+    log_message \
+        "Environment shell: ssh ${vnc_ssh_alias} -t bh-env --env ${active_environment_name} shell"
+    log_message \
+        "Environment=${active_environment_name} generation=${active_environment_generation}"
+    log_message \
+        "Container service instance=${active_container_instance_name}" \
+        "host PID=${active_container_instance_process_id}"
+    log_message \
+        "OpenCodex=${active_opencodex_status} port=${active_opencodex_port}" \
+        "PID=${active_opencodex_process_id}" \
+        "migration=${active_opencodex_migration_status}"
+    log_message \
+        "Codex app server=${active_codex_app_server_status}" \
+        "PID=${active_codex_app_server_process_id}"
+fi
 log_message "VNC address: ${vnc_url}"
 log_message \
     "VNC password file: ${vnc_user_service_directory}/state/vnc-password.txt"

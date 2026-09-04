@@ -152,7 +152,7 @@ $REMOTE_SHARED_ROOT/remote-vnc/users/$USER/
 ./remote_vnc.sh --root /path/you/can/write --no-open
 ```
 
-启动完成后，`ssh blhc3` 会进入同一个 VNC Slurm 作业。加上 `--opencodex` 会在该作业内启动 OpenCodex 并重启 Codex app-server。
+启动完成后，`ssh blhc3` 会进入同一个 VNC Slurm 作业。可写环境会默认在作业专属的 Apptainer service instance 中启动 OpenCodex 和 Codex app-server；`ssh blhc3` 使用的 `ocx` 和 `codex` 会进入同一个 instance。首次启动还会把当前用户的配置、认证、个人 skills、plugins 和 memories 复制到容器的私有持久 HOME。
 
 ## 9. 验证
 

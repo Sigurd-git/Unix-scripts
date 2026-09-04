@@ -9,6 +9,8 @@ My macOS scripts for convenient cluster management using iTerm or Terminal, with
 - **Reusable Login Connection**: Reuses an OpenSSH control master, so a running connection does not request the login password again
 - **Slurm-aware Remote Access**: Starts VS Code/Cursor tunnels, Dropbear SSHD, or VNC inside separate Slurm jobs
 - **VNC Compute Shell**: `ssh blhc3` and the XFCE Host Terminal use the VNC job's CPU, memory, GPU, and cgroup
+- **Persistent Apptainer Environment**: Gives each user a writable fakeroot sandbox with `apt`, MATLAB, CUDA, Chrome, ChatGPT, uv, pixi, and compilers
+- **Container Batch Jobs**: `bh-env sbatch job.sh` preserves the script's `#SBATCH` directives and runs the complete Bash script in the environment
 - **Self-deploying Remote Files**: Copies missing tools and checksum-versioned VNC files under `REMOTE_SHARED_ROOT`
 - **Real-time Output**: Shows job state, allocated node, startup stage, and failure logs
 
@@ -150,19 +152,26 @@ For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.
 # Copy only the VNC release files; this does not build a SIF on the login node
 ./deploy_remote_tools.sh -a bluehive3 --vnc
 
-# Start VNC and a Slurm-bound SSH shell
+# Start VNC, OpenCodex, Codex app-server, and a Slurm-bound SSH shell
 ./remote_vnc.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
 
-# Reuse the VNC job and start OpenCodex in it
-./remote_vnc.sh --opencodex
+# Use a named persistent environment
+./remote_vnc.sh --env analysis --restart
+
+# Keep the original read-only VNC image
+./remote_vnc.sh --immutable --restart
+
+# Reuse the running VNC job without opening Screen Sharing
+./remote_vnc.sh --no-open
 ```
 
 ### Remote VNC and Slurm-bound SSH
 
 `remote_vnc.sh` starts an independent Slurm job containing an Apptainer XFCE
-desktop. It does not reuse the `my_sshd` job created by `remote_sshd.sh`.
+desktop. The default `default` environment is a persistent writable sandbox.
+The job remains separate from the `my_sshd` job created by `remote_sshd.sh`.
 
-The VNC job also starts two host-side SSH services:
+The VNC job starts two host-side SSH services:
 
 - The Mac connects to a public-key-only service using `ssh blhc3`.
 - The **Bluehive Host Terminal** inside XFCE connects back to the compute host.
@@ -170,6 +179,16 @@ The VNC job also starts two host-side SSH services:
 Both shells inherit the VNC job's Slurm environment and batch cgroup. They can
 use host programs, environment modules, `/gpfs/fs1`, `/gpfs/fs2`, and
 `/scratch` without escaping the allocated CPU, memory, or GPU limits.
+
+The sandbox maps the current user to root only inside the container when
+`bh-env admin` is running. It cannot change the host, read files the account
+cannot normally read, request unallocated GPUs, or bypass Slurm limits.
+
+For a mutable environment, the job also starts OpenCodex and Codex app-server
+inside one job-scoped Apptainer service instance. `ocx` and `codex` entered
+through `ssh blhc3` join that same instance, so the client, proxy, and daemon
+share one PID namespace. Ordinary SSH commands continue to run on the compute
+host.
 
 #### Start or reuse VNC
 
@@ -195,7 +214,10 @@ an older VNC job:
 ```
 
 During startup, the script reports stages such as `CHECKING_IMAGE`,
-`BUILDING_IMAGE`, `STARTING_VNC`, `STARTING_SSH`, and `READY`.
+`BUILDING_IMAGE`, `BUILDING_ENVIRONMENT`, `PROVISIONING_ENVIRONMENT`,
+`STARTING_VNC`, `STARTING_SSH`, and `READY`. The first mutable launch installs
+the development environment and can take substantially longer than later
+launches. Existing valid generations are reused.
 
 #### Remote root and file layout
 
@@ -219,7 +241,14 @@ ${REMOTE_SHARED_ROOT}/remote-vnc/
 ├── releases/<bundle_sha256>/
 │   ├── remote_vnc_job.sh
 │   ├── start_vnc.sh
+│   ├── start_opencodex.sh
 │   ├── build_vnc_image.sh
+│   ├── prepare_environment.sh
+│   ├── provision_environment.sh
+│   ├── environment_common.sh
+│   ├── bh-env.sh
+│   ├── environment-packages.txt
+│   ├── matlab-products.txt
 │   ├── ubuntu-vnc-xfce-g3_24.04.def
 │   └── bundle.sha256
 └── users/${USER}/
@@ -228,7 +257,13 @@ ${REMOTE_SHARED_ROOT}/remote-vnc/
     │   ├── vnc-password.txt
     │   └── jobs/<slurm_job_id>/
     ├── logs/
-    └── images/
+    ├── images/
+    ├── bin/bh-env
+    └── environments/<name>/
+        ├── current -> generations/<generation>/
+        ├── generations/<generation>/rootfs/
+        ├── home/
+        └── checkpoints/
 ```
 
 The release directory name is the SHA-256 of `bundle.sha256`. Existing releases
@@ -258,10 +293,14 @@ The job selects an image in this order:
 3. Build a private SIF inside the current VNC Slurm job.
 
 The Apptainer definition pins the Linux amd64 source manifest instead of the
-mutable `24.04` tag. Build cache and temporary data stay in `SLURM_TMPDIR`; a
-per-user `flock` prevents concurrent jobs from building the same image. The
-image preparation deadline is 30 minutes. Git stores the definition and
-checksums, while `.gitignore` excludes SIF binaries.
+mutable `24.04` tag. Base-image build cache and temporary data stay in
+`SLURM_TMPDIR`; a per-user `flock` prevents concurrent jobs from building the
+same image. The image preparation deadline is 30 minutes. Git stores the
+definition and checksums, while `.gitignore` excludes SIF binaries.
+
+The selected SIF is the base for the named writable sandbox. Environment build
+files stay under the private user directory because the complete MATLAB and
+CUDA installation can exceed a compute node's local temporary storage.
 
 Use a different shared image path for another cluster or to test the private
 build path:
@@ -304,22 +343,142 @@ After startup, connect directly to the allocation:
 ssh blhc3
 ```
 
+Enter the persistent environment after connecting:
+
+```bash
+bh-env shell
+```
+
+The VNC desktop itself already runs in this environment. Its desktop contains
+launchers for an environment terminal, an admin terminal, Google Chrome,
+ChatGPT, and MATLAB R2024b. **Bluehive Host Terminal** remains available for
+host modules and programs.
+
+The environment includes Ubuntu development tools, GCC/G++, GFortran, CMake,
+Ninja, Git, SSH, screen, tmux, Node.js, npm, OpenCodex 2.39.0, Codex CLI
+0.150.1, uv, pixi, CUDA 12.5 development components, Google Chrome, the
+ChatGPT Linux desktop app, VNC/XFCE, MathWorks Package Manager (`mpm`), and
+MATLAB R2024b with:
+
+- Signal Processing Toolbox
+- Statistics and Machine Learning Toolbox
+- Parallel Computing Toolbox
+- Image Processing Toolbox
+- Audio Toolbox
+- DSP System Toolbox
+- Optimization Toolbox
+- Curve Fitting Toolbox
+- Deep Learning Toolbox
+
+The CUDA toolkit comes from the container. Apptainer `--nv` injects the driver
+and allocated GPU devices from the compute host. MATLAB uses the existing
+BlueHive network license file through its `/gpfs/fs1` mount.
+
+#### Install software and preserve changes
+
+Open a writable fakeroot shell from `ssh blhc3`:
+
+```bash
+bh-env admin
+apt-get update
+apt-get install -y ffmpeg
+exit
+```
+
+Or run one command directly:
+
+```bash
+bh-env admin -- apt-get install -y ffmpeg
+```
+
+Changes to the sandbox and its home directory persist across VNC jobs. Use a
+named environment when separate software stacks are useful:
+
+```bash
+./remote_vnc.sh --env experiment --restart
+ssh blhc3 -t 'bh-env --env experiment shell'
+```
+
+`--immutable` starts the prior read-only SIF workflow, skips sandbox creation,
+and does not start the container OpenCodex service. Changing environment name
+or mode for an active VNC allocation requires `--restart`.
+
+#### Submit batch scripts in the environment
+
+Run this from a BlueHive login shell or from `ssh blhc3`:
+
+```bash
+bh-env sbatch analysis.sh
+```
+
+The generated submission wrapper copies every `#SBATCH` directive from
+`analysis.sh`. Slurm allocates the resources and establishes the working
+directory, then `/bin/bash analysis.sh` runs inside the current environment.
+Arguments are forwarded:
+
+```bash
+bh-env sbatch analysis.sh subject-01 --overwrite
+```
+
+Use `bh-env --env NAME sbatch ...` for another prepared environment.
+
+#### Checkpoint, restore, and rebuild
+
+These commands perform Apptainer image operations and must run inside a Slurm
+allocation:
+
+```bash
+# Save the current rootfs before a risky change
+bh-env checkpoint before-upgrade
+
+# List the checkpoint path, then restore it as a new current generation
+bh-env restore 20260903T120000Z-before-upgrade.sif
+
+# Build a clean generation from the verified VNC base image
+bh-env rebuild
+
+# Show versions, paths, and the selected generation
+bh-env status
+```
+
+`restore` and `rebuild` switch the `current` symlink atomically. New `bh-env`
+shells and batch jobs use the new generation immediately. Restart the VNC job
+when its desktop should move to that generation. Old generations remain in the
+private environment directory for manual recovery.
+
 Check that the shell is in the expected Slurm job and can see host resources:
 
 ```bash
 ssh blhc3 'printf "job=%s node=%s\n" "$SLURM_JOB_ID" "$(hostname -s)"; cat /proc/self/cgroup; type module; test -d /gpfs/fs1; test -d /gpfs/fs2; test -d /scratch'
 ```
 
-Start OpenCodex in a detached screen and restart Codex app-server inside the
-same allocation:
+OpenCodex and Codex app-server start automatically with every mutable VNC job.
+Check them through the Slurm-bound host shell, whose wrappers enter the running
+service instance:
 
 ```bash
-./remote_vnc.sh --opencodex --no-open
+ssh blhc3 'ocx ready --json'
+ssh blhc3 'codex app-server daemon version'
 ```
 
-The command verifies that both OpenCodex and Codex app-server remain in the
-VNC job's batch cgroup. It prints the exact `screen -r` command when startup
-succeeds.
+The VNC desktop and service instance use the same sandbox and persistent HOME.
+The separate instance exists only so long-lived OpenCodex and app-server
+processes, later SSH commands, and Codex App all see the same PID namespace.
+
+The first mutable launch copies the existing host configuration into that
+environment's private persistent home. This includes the current OpenCodex
+configuration and authentication files, Codex `config.toml`, authentication,
+catalog settings, `AGENTS.md`, personal skills, plugin files, memories, and
+imported skill sources. Existing destination files are preserved. Runtime PIDs,
+sockets, logs, histories, sessions, and response state are excluded. Later
+launches use the container copy, so changes made there persist without repeating
+this migration.
+
+Startup verifies the Apptainer instance, OpenCodex proxy, and Codex app-server
+PIDs against the VNC job's batch cgroup before marking the job ready. Service
+state and logs are in
+`users/${USER}/state/jobs/<slurm_job_id>/opencodex/`. If either service exits,
+the managed VNC job fails and records the reason there.
 
 ### Automatic Illustrator Bundle Sync
 
@@ -359,7 +518,8 @@ The Slurm launch scripts share these resource options:
 
 `remote_vnc.sh` also accepts:
 
-- `--opencodex`: start `ocx` in `screen`, then restart Codex app-server
+- `--env NAME`: select or create a persistent environment; default `default`
+- `--immutable`: run the original read-only image without preparing a sandbox
 - `--restart`: replace the current VNC job
 - `--no-open`: do not open macOS Screen Sharing
 
@@ -375,3 +535,5 @@ Run any script with `--help` for its current defaults.
 - SSH host keys are checked before the Mac stores the VNC connection state.
 - The script rejects a compute shell, OpenCodex proxy, or Codex app-server process outside the expected Slurm batch cgroup.
 - Shared and private SIF files are checked before execution.
+- Mutable environments and checkpoints remain under each user's mode `0700` directory.
+- Fakeroot applies only to the Apptainer sandbox and retains the user's host permissions.

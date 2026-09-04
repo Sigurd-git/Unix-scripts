@@ -56,7 +56,8 @@ load_apptainer() {
         return 1
     }
     # shellcheck disable=SC1091
-    source /etc/profile.d/modules.sh
+    source /etc/profile.d/modules.sh 2>/dev/null || true
+    type module >/dev/null 2>&1 || return 1
     module purge
     module load apptainer/1.4.1
     command -v apptainer >/dev/null 2>&1

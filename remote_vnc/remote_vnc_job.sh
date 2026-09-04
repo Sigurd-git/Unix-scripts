@@ -10,30 +10,59 @@ remote_sshd_helper="${4:?remote SSH helper is required}"
 authorized_keys_file="${5:?authorized keys file is required}"
 startup_timeout_seconds="${6:-300}"
 image_build_timeout_seconds="${7:-1800}"
+environment_name="${8:-default}"
+environment_mode="${9:-mutable}"
+environment_build_timeout_seconds="${10:-10800}"
 
-launcher_version="3"
+launcher_version="6"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${job_id}"
 vnc_connection_file="${state_directory}/connection.env"
 launcher_state_file="${job_state_directory}/managed-launcher.env"
 image_status_file="${job_state_directory}/image-status"
+environment_status_file="${job_state_directory}/environment-status"
 remote_ssh_connection_file="${job_state_directory}/remote-ssh/connection.env"
 start_vnc_script="${release_directory}/start_vnc.sh"
 build_vnc_image_script="${release_directory}/build_vnc_image.sh"
+prepare_environment_script="${release_directory}/prepare_environment.sh"
+environment_common_helpers="${release_directory}/environment_common.sh"
 canonical_checksum_file="${release_directory}/ubuntu-vnc-xfce-g3_24.04.sha256"
 definition_file="${release_directory}/ubuntu-vnc-xfce-g3_24.04.def"
 user_image_path="${user_service_directory}/images/ubuntu-vnc-xfce-g3_24.04.sif"
 selected_image_path=""
+runtime_image_path=""
+environment_home=""
+environment_generation=""
+environment_preparation_result=""
 vnc_launcher_process_id=""
 remote_ssh_launcher_process_id=""
 
-for timeout_value in "${startup_timeout_seconds}" "${image_build_timeout_seconds}"; do
+for timeout_value in \
+    "${startup_timeout_seconds}" "${image_build_timeout_seconds}" \
+    "${environment_build_timeout_seconds}"; do
     [[ "${timeout_value}" =~ ^[1-9][0-9]*$ ]] || {
         printf 'Invalid startup timeout: %s\n' "${timeout_value}" >&2
         exit 2
     }
 done
+
+[[ -r "${environment_common_helpers}" ]] || {
+    printf 'Required environment helper is missing: %s\n' \
+        "${environment_common_helpers}" >&2
+    exit 2
+}
+# shellcheck disable=SC1090
+source "${environment_common_helpers}"
+bh_env_validate_name "${environment_name}" || {
+    printf 'Invalid environment name: %s\n' "${environment_name}" >&2
+    exit 2
+}
+[[ "${environment_mode}" == "mutable" ||
+   "${environment_mode}" == "immutable" ]] || {
+    printf 'Invalid environment mode: %s\n' "${environment_mode}" >&2
+    exit 2
+}
 
 read_state_value() {
     local state_file="$1"
@@ -70,6 +99,16 @@ read_image_status() {
     fi
 }
 
+read_environment_status() {
+    if [[ -s "${environment_status_file}" ]]; then
+        head -n 1 "${environment_status_file}"
+    elif [[ "${environment_mode}" == "immutable" ]]; then
+        printf 'ENVIRONMENT_READY:immutable'
+    else
+        printf 'NOT_STARTED'
+    fi
+}
+
 write_launcher_state() {
     local status_value="$1"
     local temporary_state_file="${launcher_state_file}.tmp.$$"
@@ -81,6 +120,11 @@ write_launcher_state() {
         printf 'NODE=%s\n' "$(hostname -s)"
         printf 'IMAGE_STATUS=%s\n' "$(read_image_status)"
         printf 'IMAGE=%s\n' "${selected_image_path}"
+        printf 'ENVIRONMENT_STATUS=%s\n' "$(read_environment_status)"
+        printf 'ENVIRONMENT_NAME=%s\n' "${environment_name}"
+        printf 'ENVIRONMENT_MODE=%s\n' "${environment_mode}"
+        printf 'ENVIRONMENT_GENERATION=%s\n' "${environment_generation}"
+        printf 'ENVIRONMENT_ROOTFS=%s\n' "${runtime_image_path}"
         printf 'VNC_LAUNCHER_PID=%s\n' "${vnc_launcher_process_id}"
         printf 'SSH_LAUNCHER_PID=%s\n' "${remote_ssh_launcher_process_id}"
         printf 'CGROUP='
@@ -121,7 +165,10 @@ trap cleanup EXIT INT TERM
 
 for required_file in \
     "${start_vnc_script}" \
+    "${release_directory}/start_opencodex.sh" \
     "${build_vnc_image_script}" \
+    "${prepare_environment_script}" \
+    "${environment_common_helpers}" \
     "${canonical_checksum_file}" \
     "${definition_file}" \
     "${remote_sshd_helper}" \
@@ -132,7 +179,10 @@ for required_file in \
     }
 done
 for required_executable in \
-    "${start_vnc_script}" "${build_vnc_image_script}" "${remote_sshd_helper}"; do
+    "${start_vnc_script}" "${build_vnc_image_script}" \
+    "${release_directory}/start_opencodex.sh" \
+    "${prepare_environment_script}" "${environment_common_helpers}" \
+    "${remote_sshd_helper}"; do
     [[ -x "${required_executable}" ]] || {
         printf 'Required script is not executable: %s\n' \
             "${required_executable}" >&2
@@ -145,9 +195,12 @@ ssh-keygen -lf "${authorized_keys_file}" >/dev/null || {
     exit 2
 }
 
-mkdir -p "${job_state_directory}" "${user_service_directory}/images"
+mkdir -p \
+    "${job_state_directory}" "${user_service_directory}/images" \
+    "${user_service_directory}/environments"
 chmod 700 "${user_service_directory}" "${state_directory}" \
-    "${job_state_directory}" "${user_service_directory}/images"
+    "${job_state_directory}" "${user_service_directory}/images" \
+    "${user_service_directory}/environments"
 write_launcher_state "CHECKING_IMAGE"
 
 selected_image_path="$(
@@ -165,9 +218,52 @@ selected_image_path="$(
     exit 2
 }
 
+base_image_state_file="${state_directory}/base-image-path"
+temporary_base_image_state_file="${base_image_state_file}.tmp.$$"
+printf '%s\n' "${selected_image_path}" > "${temporary_base_image_state_file}"
+chmod 600 "${temporary_base_image_state_file}"
+mv "${temporary_base_image_state_file}" "${base_image_state_file}"
+
+if [[ "${environment_mode}" == "mutable" ]]; then
+    write_launcher_state "PREPARING_ENVIRONMENT"
+    environment_record="$(
+        "${prepare_environment_script}" \
+            "${release_directory}" \
+            "${user_service_directory}" \
+            "${selected_image_path}" \
+            "${environment_name}" \
+            "${environment_status_file}" \
+            "${environment_build_timeout_seconds}" \
+            false
+    )"
+    IFS='|' read -r \
+        runtime_image_path environment_home environment_generation \
+        environment_recipe_digest environment_preparation_result \
+        <<< "${environment_record}"
+    [[ -d "${runtime_image_path}" && -d "${environment_home}" ]] || {
+        printf 'Prepared environment is invalid: %s\n' \
+            "${environment_record}" >&2
+        exit 2
+    }
+else
+    runtime_image_path="${selected_image_path}"
+    environment_home="${job_state_directory}/home"
+    environment_generation="base-image"
+    environment_preparation_result="immutable"
+    mkdir -p "${environment_home}"
+    chmod 700 "${environment_home}"
+    printf 'ENVIRONMENT_READY:immutable\n' > "${environment_status_file}"
+fi
+
 write_launcher_state "STARTING_VNC"
 "${start_vnc_script}" \
-    "${release_directory}" "${user_service_directory}" "${selected_image_path}" &
+    "${release_directory}" \
+    "${user_service_directory}" \
+    "${runtime_image_path}" \
+    "${environment_name}" \
+    "${environment_mode}" \
+    "${environment_home}" \
+    "${environment_generation}" &
 vnc_launcher_process_id=$!
 write_launcher_state "STARTING_VNC"
 

@@ -157,8 +157,12 @@ Override the writable remote root for one run with:
 ./remote_vnc.sh --root /path/you/can/write --no-open
 ```
 
-After startup, `ssh blhc3` enters the same VNC Slurm allocation. Add
-`--opencodex` to start OpenCodex there and restart Codex app-server.
+After startup, `ssh blhc3` enters the same VNC Slurm allocation. A mutable
+environment starts OpenCodex and Codex app-server in a job-scoped Apptainer
+service instance by default; `ocx` and `codex` invoked through `ssh blhc3` join
+that same instance. Its first launch also copies the current user's
+configuration, authentication, personal skills, plugins, and memories into the
+container's private persistent home.
 
 ## 9. Verification
 
