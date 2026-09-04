@@ -1229,7 +1229,7 @@ active_codex_app_server_process_id="$(
     exit 6
 }
 
-printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "${job_id}" "${vnc_node}" "${vnc_port}" "${remote_ssh_port}" \
     "${host_key_public_file}" "${actual_partition}" "${actual_cpu_count}" \
     "${actual_gpu_count}" "${actual_memory}" "${actual_time_limit}" \
@@ -1240,7 +1240,8 @@ printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\
     "${active_opencodex_migration_status}" \
     "${active_codex_app_server_status}" \
     "${active_codex_app_server_process_id}" \
-    "${remote_ssh_target}" "${remote_sftp_status}" "${active_vnc_geometry}"
+    "${remote_ssh_target}" "${remote_sftp_status}" "${active_vnc_geometry}" \
+    "${active_macos_shortcuts_status}"
 REMOTE_START
 )" || fail "remote VNC startup failed"
 
@@ -1253,7 +1254,8 @@ IFS='|' read -r \
     active_opencodex_status active_opencodex_process_id active_opencodex_port \
     active_opencodex_migration_status active_codex_app_server_status \
     active_codex_app_server_process_id active_remote_ssh_target \
-    active_remote_sftp_status active_vnc_geometry <<< "${ready_record}"
+    active_remote_sftp_status active_vnc_geometry \
+    active_macos_shortcuts_status <<< "${ready_record}"
 [[ "${vnc_job_id}" =~ ^[0-9]+$ ]] || fail "invalid VNC Job ID: ${vnc_job_id}"
 [[ "${vnc_node}" =~ ^[A-Za-z0-9._-]+$ ]] || fail "invalid VNC node: ${vnc_node}"
 [[ "${remote_vnc_port}" =~ ^[0-9]+$ ]] || fail "invalid VNC port: ${remote_vnc_port}"
@@ -1789,6 +1791,8 @@ local_state_temporary_file="$(mktemp "${local_connection_state_file}.XXXXXX")"
     printf 'REMOTE_VNC_PORT=%s\n' "${remote_vnc_port}"
     printf 'LOCAL_VNC_PORT=%s\n' "${local_vnc_port}"
     printf 'VNC_GEOMETRY=%s\n' "${active_vnc_geometry}"
+    printf 'MACOS_SHORTCUTS_STATUS=%s\n' \
+        "${active_macos_shortcuts_status}"
     printf 'LOCAL_OPENCODEX_PORT=%s\n' "${local_opencodex_port}"
     printf 'REMOTE_SHARED_ROOT=%s\n' "${REMOTE_SHARED_ROOT}"
     printf 'REMOTE_VNC_USER_DIRECTORY=%s\n' "${vnc_user_service_directory}"
@@ -1853,15 +1857,15 @@ if [[ "${open_vnc_viewer}" == "true" ]]; then
     tiger_vnc_executable="${tiger_vnc_application}/Contents/MacOS/vncviewer"
     if [[ -x "${tiger_vnc_executable}" ]]; then
         log_message \
-            "Opening TigerVNC; enter the VNC password manually."
+            "Opening TigerVNC in full screen; enter the VNC password manually."
         log_message \
-            "Use Control+Option+G to capture macOS system shortcuts;" \
-            "Control+Option releases them."
+            "macOS system shortcuts are captured automatically;" \
+            "Control+Option releases them and Control+Option+G recaptures them."
         open -na "${tiger_vnc_application}" --args \
             -AcceptClipboard=1 \
+            -FullScreen=1 \
+            -FullscreenSystemKeys=1 \
             -SendClipboard=1 \
-            -SendPrimary=1 \
-            -SetPrimary=1 \
             -MaxCutText=1048576 \
             -RemoteResize=0 \
             -SecurityTypes=VncAuth \

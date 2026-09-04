@@ -204,9 +204,11 @@ Start with the defaults (16 CPUs, 1 GPU, 256 GiB, 24 hours):
 ./remote_vnc.sh
 ```
 
-After the SSH and VNC checks pass, the script opens TigerVNC when it is
-installed under `/Applications`; otherwise it uses macOS Screen Sharing. Keep
-the job and tunnel running without opening a viewer with:
+After the SSH and VNC checks pass, the script opens TigerVNC in full screen
+when it is installed under `/Applications`; otherwise it uses macOS Screen
+Sharing. Full screen lets TigerVNC forward the Mac Command key to the remote
+desktop automatically. Keep the job and tunnel running without opening a
+viewer with:
 
 ```bash
 ./remote_vnc.sh --no-open
@@ -259,19 +261,21 @@ The existing desktop shortcuts remain available: Command+Space opens the
 application finder, Command+Tab switches windows, Command+M minimizes,
 Command+Arrow maximizes or tiles, Command+Return opens a terminal, and
 Command+Shift+3 or 4 takes screenshots. macOS reserves some system shortcuts,
-including Command+Tab and Command+Space. In TigerVNC, press
-Control+Option+G once to capture them; the window title will include
-`keyboard grabbed`. Press Control+Option by itself to return those shortcuts to
-macOS. The first capture may require enabling TigerVNC in **System Settings →
-Privacy & Security → Accessibility**.
+including Command+Tab and Command+Space. The launcher opens TigerVNC in full
+screen with system-key forwarding enabled, so the Command key is captured
+automatically. Press Control+Option to return those shortcuts to macOS; press
+Control+Option+G to capture them again. The window title includes
+`keyboard grabbed` while capture is active. The first capture may require
+enabling TigerVNC in **System Settings → Privacy & Security → Accessibility**.
 
 TigerVNC uses RFB 3.8 with `VncAuth` and listens only on compute-node loopback.
 The script forwards it through the existing public-key SSH connection.
 TigerVNC is the recommended Mac client because its text clipboard works with
 this Linux server and it forwards Command as Super. The launcher enables both
-clipboard directions, keeps the requested remote geometry instead of resizing
-it to the viewer window, and never reads the saved VNC password. File and image
-clipboard formats are outside the standard VNC text clipboard protocol.
+clipboard directions, starts the viewer executable with checked macOS client
+options, keeps the requested remote geometry instead of resizing it to the
+viewer window, and never reads the saved VNC password. File and image clipboard
+formats are outside the standard VNC text clipboard protocol.
 
 #### Remote root and file layout
 
