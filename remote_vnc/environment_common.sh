@@ -175,8 +175,8 @@ bh_env_append_runtime_options() {
         --env "XDG_RUNTIME_DIR=${runtime_directory}"
         --env "LANG=C.UTF-8"
         --env "TERM=${TERM:-xterm-256color}"
-        --env "PATH=/usr/local/cuda/bin:/opt/matlab/R2024b/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-        --env "MLM_LICENSE_FILE=${MLM_LICENSE_FILE:-/gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2024b/licenses/network.lic}"
+        --env "PATH=/usr/local/cuda/bin:/opt/matlab/R2025b/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        --env "MLM_LICENSE_FILE=${MLM_LICENSE_FILE:-/gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/licenses/network.lic}"
     )
     [[ -n "${display_value}" ]] &&
         runtime_options+=(--env "DISPLAY=${display_value}")

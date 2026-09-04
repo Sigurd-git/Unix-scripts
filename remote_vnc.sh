@@ -1407,7 +1407,7 @@ printf 'CGROUP='
 tr '\n' ';' < "/proc/$$/cgroup"
 printf '\n'
 [[ -d "${remote_shared_root}" ]] && printf 'DATA=available\n'
-[[ -x /gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2024b/bin/matlab ]] &&
+[[ -x /gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/bin/matlab ]] &&
     printf 'MATLAB=available\n'
 type module >/dev/null 2>&1 && printf 'MODULE=available\n'
 true
@@ -1440,11 +1440,12 @@ bh_env_executable="${HOME}/.local/bin/bh-env"
 "${bh_env_executable}" --env "${environment_name}" exec -- \
     /bin/bash -c '
         set -Eeuo pipefail
-        for command_name in gcc g++ node npm ocx codex uv pixi nvcc \
+        for command_name in fish gcc g++ node npm ocx codex uv pixi nvcc \
             google-chrome-stable \
             chatgpt matlab mpm vncserver; do
             command -v "${command_name}" >/dev/null
         done
+        test -x /opt/matlab/R2025b/bin/matlab
         test -d /gpfs/fs1
         test -d /gpfs/fs2
         test -d /scratch

@@ -349,16 +349,23 @@ Enter the persistent environment after connecting:
 bh-env shell
 ```
 
+Interactive environment and admin shells use Fish by default. The Bluehive
+Host Terminal and `bh-env sbatch` continue to use Bash for module and batch
+script compatibility. Each newly opened environment terminal enters the current
+generation through the job-local SSH service, so software installed with
+`bh-env admin` is available without restarting the VNC desktop.
+
 The VNC desktop itself already runs in this environment. Its desktop contains
 launchers for an environment terminal, an admin terminal, Google Chrome,
-ChatGPT, and MATLAB R2024b. **Bluehive Host Terminal** remains available for
-host modules and programs.
+ChatGPT, and MATLAB R2025b. **Bluehive Host Terminal** remains available for
+host modules and programs. The environment terminal and MATLAB launchers always
+enter the current environment generation.
 
-The environment includes Ubuntu development tools, GCC/G++, GFortran, CMake,
-Ninja, Git, SSH, screen, tmux, Node.js, npm, OpenCodex 2.39.0, Codex CLI
+The environment includes Ubuntu development tools, Fish, GCC/G++, GFortran,
+CMake, Ninja, Git, SSH, screen, tmux, Node.js, npm, OpenCodex 2.39.0, Codex CLI
 0.150.1, uv, pixi, CUDA 12.5 development components, Google Chrome, the
-ChatGPT Linux desktop app, VNC/XFCE, MathWorks Package Manager (`mpm`), and
-MATLAB R2024b with:
+ChatGPT Linux desktop app, VNC/XFCE, MathWorks Package Manager (`mpm`), Noto
+CJK fonts for Chinese text, and MATLAB R2025b with:
 
 - Signal Processing Toolbox
 - Statistics and Machine Learning Toolbox

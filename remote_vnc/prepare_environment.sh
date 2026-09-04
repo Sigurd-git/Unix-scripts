@@ -104,14 +104,15 @@ generation_is_valid() {
     [[ -s "${generation_directory}/metadata.env" ]] || return 1
     apptainer exec --cleanenv "${rootfs_path}" /bin/bash -c '
         set -eu
-        export PATH="/usr/local/cuda/bin:/opt/matlab/R2024b/bin:${PATH}"
+        export PATH="/usr/local/cuda/bin:/opt/matlab/R2025b/bin:${PATH}"
         test -s /etc/bh-env/build-manifest.env
-        for command_name in gcc g++ gfortran git screen ssh node npm ocx codex \
+        grep -Fxq "MATLAB_RELEASE=R2025b" /etc/bh-env/build-manifest.env
+        for command_name in fish gcc g++ gfortran git screen ssh node npm ocx codex \
             uv pixi nvcc \
             google-chrome-stable chatgpt matlab mpm vncserver xfce4-session; do
             command -v "${command_name}" >/dev/null
         done
-        test -x /opt/matlab/R2024b/bin/matlab
+        test -x /opt/matlab/R2025b/bin/matlab
     ' >/dev/null 2>&1
 }
 

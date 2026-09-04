@@ -8,7 +8,7 @@ print_usage() {
 Usage: bh-env [--env NAME] COMMAND [arguments]
 
 Commands:
-  shell                       Open an interactive shell in the environment
+  shell                       Open an interactive Fish shell in the environment
   exec -- COMMAND [ARG ...]   Run one command in the environment
   admin [-- COMMAND ...]      Open a writable fakeroot shell or run a command
   sbatch SCRIPT [ARG ...]     Submit a Bash script inside the environment
@@ -117,13 +117,15 @@ validate_generation() {
         return 1
     apptainer exec --cleanenv "${rootfs_path}" /bin/bash -c '
         set -eu
-        export PATH="/usr/local/cuda/bin:/opt/matlab/R2024b/bin:${PATH}"
+        export PATH="/usr/local/cuda/bin:/opt/matlab/R2025b/bin:${PATH}"
         test -s /etc/bh-env/build-manifest.env
-        for command_name in gcc g++ node npm ocx codex uv pixi nvcc \
+        grep -Fxq "MATLAB_RELEASE=R2025b" /etc/bh-env/build-manifest.env
+        for command_name in fish gcc g++ node npm ocx codex uv pixi nvcc \
             google-chrome-stable \
             chatgpt matlab mpm vncserver; do
             command -v "${command_name}" >/dev/null
         done
+        test -x /opt/matlab/R2025b/bin/matlab
     ' >/dev/null 2>&1
 }
 
@@ -458,7 +460,12 @@ submit_batch_script() {
 case "${command_name}" in
     shell)
         [[ $# -eq 0 ]] || fail "shell does not accept arguments"
-        run_in_environment normal /bin/bash -l
+        run_in_environment normal /bin/sh -c '
+            if [ -x /usr/bin/fish ]; then
+                exec /usr/bin/fish -l
+            fi
+            exec /bin/bash -l
+        '
         ;;
     exec)
         [[ "${1:-}" == "--" ]] && shift
@@ -470,8 +477,13 @@ case "${command_name}" in
         if [[ $# -gt 0 ]]; then
             run_in_environment admin "$@"
         else
-            run_in_environment admin /bin/bash -c \
-                'export PS1="(bh-env admin) \u@\h:\w\\$ "; exec /bin/bash --noprofile --norc -i'
+            run_in_environment admin /bin/sh -c '
+                if [ -x /usr/bin/fish ]; then
+                    exec /usr/bin/fish -l
+                fi
+                export PS1="(bh-env admin) \u@\h:\w\\$ "
+                exec /bin/bash --noprofile --norc -i
+            '
         fi
         ;;
     sbatch)

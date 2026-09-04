@@ -7,7 +7,7 @@ release_directory="${BH_ENV_RELEASE_DIRECTORY:-/opt/bh-env-release}"
 build_directory="${BH_ENV_BUILD_DIRECTORY:-/var/tmp/bh-env-build}"
 package_list_file="${release_directory}/environment-packages.txt"
 matlab_products_file="${release_directory}/matlab-products.txt"
-matlab_release="R2024b"
+matlab_release="R2025b"
 matlab_destination="/opt/matlab/${matlab_release}"
 node_version="22.23.2"
 node_archive_name="node-v${node_version}-linux-x64.tar.xz"
@@ -109,6 +109,7 @@ printf '[bh-env] Installing Ubuntu development and desktop packages.\n'
 apt-get update
 apt-get install -y --no-install-recommends "${apt_packages[@]}"
 locale-gen en_US.UTF-8
+fc-cache -f
 if [[ ! -s /etc/machine-id ]]; then
     dbus-uuidgen --ensure=/etc/machine-id
 fi
@@ -232,10 +233,10 @@ printf '[bh-env] Installing MATLAB %s and selected toolboxes.\n' \
 ln -sfn "${matlab_destination}/bin/matlab" /usr/local/bin/matlab
 
 cat > /etc/profile.d/bh-env.sh <<'PROFILE'
-export PATH="/usr/local/cuda/bin:/opt/matlab/R2024b/bin:${PATH}"
+export PATH="/usr/local/cuda/bin:/opt/matlab/R2025b/bin:${PATH}"
 if [ -z "${MLM_LICENSE_FILE:-}" ] &&
-   [ -r /gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2024b/licenses/network.lic ]; then
-    export MLM_LICENSE_FILE=/gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2024b/licenses/network.lic
+   [ -r /gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/licenses/network.lic ]; then
+    export MLM_LICENSE_FILE=/gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/licenses/network.lic
 fi
 PROFILE
 chmod 644 /etc/profile.d/bh-env.sh
@@ -247,7 +248,7 @@ rm -rf /var/lib/apt/lists/*
 ldconfig
 
 for required_command in \
-    gcc g++ gfortran git screen ssh node npm ocx codex uv pixi nvcc \
+    fc-list fish gcc g++ gfortran git screen ssh node npm ocx codex uv pixi nvcc \
     google-chrome-stable chatgpt matlab mpm vncserver xfce4-session; do
     command -v "${required_command}" >/dev/null 2>&1 || {
         printf 'Provisioned command is unavailable: %s\n' \
@@ -255,6 +256,26 @@ for required_command in \
         exit 4
     }
 done
+cjk_font_count="$(fc-list :lang=zh | wc -l)"
+(( cjk_font_count > 0 )) || {
+    printf 'Provisioned environment has no Chinese-capable fonts.\n' >&2
+    exit 4
+}
+matlab_splash_library="${matlab_destination}/bin/glnxa64/splash/coreui/libmwSplashScreenImpl.so"
+[[ -r "${matlab_splash_library}" ]] || {
+    printf 'MATLAB splash library is missing: %s\n' \
+        "${matlab_splash_library}" >&2
+    exit 4
+}
+missing_matlab_splash_dependencies="$(
+    LC_ALL=C ldd "${matlab_splash_library}" |
+        awk '$2 == "=>" && $3 == "not" && $4 == "found" { print $1 }'
+)"
+[[ -z "${missing_matlab_splash_dependencies}" ]] || {
+    printf 'MATLAB splash dependencies are missing: %s\n' \
+        "${missing_matlab_splash_dependencies//$'\n'/, }" >&2
+    exit 4
+}
 
 : > "${temporary_manifest}"
 printf 'SCHEMA_VERSION=1\n' >> "${temporary_manifest}"
@@ -287,6 +308,12 @@ printf 'CUDA_COMPILER_PACKAGE=%s\n' \
     "$(dpkg-query -W -f='${Version}' cuda-compiler-12-5)" \
     >> "${temporary_manifest}"
 printf 'GCC_VERSION=%s\n' "$(gcc -dumpfullversion)" \
+    >> "${temporary_manifest}"
+printf 'FISH_VERSION=%s\n' "$(fish --version | awk '{ print $NF; exit }')" \
+    >> "${temporary_manifest}"
+printf 'CJK_FONT_COUNT=%s\n' "${cjk_font_count}" \
+    >> "${temporary_manifest}"
+printf 'MATLAB_SPLASH_DEPENDENCIES=resolved\n' \
     >> "${temporary_manifest}"
 printf 'CHROME_VERSION=%s\n' \
     "$(dpkg-query -W -f='${Version}' google-chrome-stable)" \

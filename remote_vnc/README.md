@@ -17,10 +17,12 @@ allocation. The default launch then prepares a named writable sandbox under
 
 `prepare_environment.sh` creates versioned sandbox generations and calls
 `provision_environment.sh` with fakeroot. The recipe installs the package list,
-OpenCodex, Codex CLI, CUDA 12.5 development tools, Chrome, ChatGPT, uv, pixi,
-and MATLAB R2024b with the products in `matlab-products.txt`. A validated
-`current` symlink activates the generation. Existing environments remain
-mutable through `bh-env admin`.
+Fish, OpenCodex, Codex CLI, CUDA 12.5 development tools, Chrome, ChatGPT, uv,
+pixi, Noto CJK fonts, and MATLAB R2025b with the products in
+`matlab-products.txt`. Provisioning verifies that the completed environment has
+at least one Chinese-capable font and that MATLAB's splash library has no
+unresolved dependencies. A validated `current` symlink activates the generation.
+Existing environments remain mutable through `bh-env admin`.
 
 `start_opencodex.sh` copies missing host OpenCodex/Codex settings, credentials,
 personal skills, plugins, memories, and imported skill sources into the private
@@ -35,7 +37,12 @@ OpenCodex loopback ports; the Mac-side launcher verifies the dashboard through
 
 `bh-env.sh` provides interactive shells, command execution, Slurm submission,
 checkpoints, restore, and clean rebuilds. `bh-env sbatch` copies the original
-`#SBATCH` directives and starts the whole Bash script inside the sandbox.
+`#SBATCH` directives and starts the whole Bash script inside the sandbox. VNC
+environment terminals and interactive `bh-env` shells default to Fish; host
+terminal and batch execution remain Bash-based. VNC terminal and MATLAB
+launchers enter the current generation through the allocation's private SSH
+service, allowing a running desktop to use software installed after its initial
+Apptainer mount was created.
 
 Passwords, SSH keys, logs, environments, checkpoints, and job state remain
 under the same private user directory with mode `0700`.

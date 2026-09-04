@@ -6,7 +6,7 @@ environment_name="${1:-${BH_ENV_NAME:-default}}"
 [[ $# -eq 0 ]] || shift
 
 if [[ "${environment_name}" == "--host" ]]; then
-    matlab_executable="/gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2024b/bin/matlab"
+    matlab_executable="/gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/bin/matlab"
     [[ -x "${matlab_executable}" ]] || {
         printf 'Host MATLAB executable is missing: %s\n' \
             "${matlab_executable}" >&2

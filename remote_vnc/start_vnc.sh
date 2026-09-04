@@ -16,6 +16,8 @@ host_home="${HOME:?HOME is required}"
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${job_id}"
 session_home="${requested_session_home:-${job_state_directory}/home}"
+xfce_terminal_config_directory="${session_home}/.config/xfce4/terminal"
+xfce_terminal_config_file="${xfce_terminal_config_directory}/terminalrc"
 runtime_directory="${SLURM_TMPDIR:-/tmp}/remote-vnc-${current_user}-${job_id}"
 container_home="/home/${current_user}"
 connection_file="${state_directory}/connection.env"
@@ -27,7 +29,7 @@ host_shell_log_file="${job_state_directory}/host-shell.log"
 host_shell_process_id=""
 gpu_log_file="${job_state_directory}/gpu-usage.csv"
 gpu_monitor_process_id=""
-matlab_executable="/opt/matlab/R2024b/bin/matlab"
+matlab_executable="/opt/matlab/R2025b/bin/matlab"
 matlab_vnc_launcher="${release_directory}/matlab-vnc.sh"
 environment_common_helpers="${release_directory}/environment_common.sh"
 matlab_warmup_log_file="${job_state_directory}/matlab-warmup.log"
@@ -219,6 +221,7 @@ mkdir -p \
     "${session_home}/.config/tigervnc" \
     "${session_home}/.config/autostart" \
     "${session_home}/.config/xfce4" \
+    "${xfce_terminal_config_directory}" \
     "${session_home}/.local/bin" \
     "${session_home}/.local/share/applications" \
     "${session_home}/.local/share/xfce4/helpers" \
@@ -229,6 +232,7 @@ chmod 700 "${state_directory}" "${job_state_directory}" "${host_shell_directory}
     "${session_home}" \
     "${session_home}/.config" "${session_home}/.config/tigervnc" \
     "${session_home}/.config/autostart" "${session_home}/.config/xfce4" \
+    "${xfce_terminal_config_directory}" \
     "${session_home}/.local" "${session_home}/.local/bin" \
     "${session_home}/.local/share" "${session_home}/.local/share/applications" \
     "${session_home}/.local/share/xfce4" "${session_home}/.local/share/xfce4/helpers" \
@@ -260,7 +264,11 @@ host_shell_entry_script="${host_shell_directory}/entry.sh"
 host_shell_rc_file="${host_shell_directory}/bashrc"
 bluehive_shell_client="${session_home}/.local/bin/bluehive-host-shell"
 bluehive_terminal_launcher="${session_home}/.local/bin/bluehive-terminal"
+environment_shell_launcher="${session_home}/.local/bin/bh-env-shell-terminal"
+container_environment_shell_launcher="${container_home}/.local/bin/bh-env-shell-terminal"
 environment_admin_launcher="${session_home}/.local/bin/bh-env-admin-terminal"
+environment_matlab_launcher="${session_home}/.local/bin/bh-env-matlab"
+container_environment_matlab_launcher="${container_home}/.local/bin/bh-env-matlab"
 if [[ "${environment_mode}" == "mutable" ]]; then
     matlab_vnc_target="${environment_name}"
 else
@@ -321,7 +329,7 @@ if [[ "${environment_mode}" == "mutable" ]] &&
         "${apptainer_executable}" "${container_options[@]}" "${image_path}"
     )
 elif [[ "${environment_mode}" == "immutable" ]]; then
-    matlab_executable="/gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2024b/bin/matlab"
+    matlab_executable="/gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/bin/matlab"
     [[ -x "${matlab_executable}" ]] && matlab_warmup_available=true
 fi
 
@@ -483,6 +491,50 @@ chmod 700 "${bluehive_terminal_launcher}"
 } > "${environment_admin_launcher}"
 chmod 700 "${environment_admin_launcher}"
 
+if [[ "${environment_mode}" == "mutable" ]]; then
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'set -Eeuo pipefail\n'
+        printf 'exec %q %q --env %q shell\n' \
+            "${container_home}/.local/bin/bluehive-host-shell" \
+            "${host_home}/.local/bin/bh-env" "${environment_name}"
+    } > "${environment_shell_launcher}"
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'set -Eeuo pipefail\n'
+        printf 'exec %q %q --env %q exec -- matlab -desktop\n' \
+            "${container_home}/.local/bin/bluehive-host-shell" \
+            "${host_home}/.local/bin/bh-env" "${environment_name}"
+    } > "${environment_matlab_launcher}"
+    chmod 700 "${environment_shell_launcher}" \
+        "${environment_matlab_launcher}"
+
+    if [[ ! -e "${xfce_terminal_config_file}" &&
+          ! -L "${xfce_terminal_config_file}" ]]; then
+        {
+            printf '[Configuration]\n'
+            printf 'RunCustomCommand=TRUE\n'
+            printf 'CustomCommand=%s\n' \
+                "${container_environment_shell_launcher}"
+        } > "${xfce_terminal_config_file}"
+        chmod 600 "${xfce_terminal_config_file}"
+    elif [[ -f "${xfce_terminal_config_file}" &&
+            ! -L "${xfce_terminal_config_file}" ]] &&
+         grep -Fxq 'CustomCommand=/usr/bin/fish -l' \
+            "${xfce_terminal_config_file}"; then
+        temporary_terminal_config="${xfce_terminal_config_file}.tmp.$$"
+        awk -v terminal_command="${container_environment_shell_launcher}" '
+            $0 == "CustomCommand=/usr/bin/fish -l" {
+                print "CustomCommand=" terminal_command
+                next
+            }
+            { print }
+        ' "${xfce_terminal_config_file}" > "${temporary_terminal_config}"
+        chmod 600 "${temporary_terminal_config}"
+        mv "${temporary_terminal_config}" "${xfce_terminal_config_file}"
+    fi
+fi
+
 {
     printf '[Desktop Entry]\n'
     printf 'Version=1.0\n'
@@ -524,8 +576,14 @@ chmod 700 "${session_home}/Desktop/Bluehive Host Terminal.desktop"
     printf 'Name=Environment Terminal (%s)\n' "${environment_name}"
     printf 'Comment=Open a shell in the persistent Apptainer environment\n'
     printf 'Icon=utilities-terminal\n'
-    printf 'Exec=/usr/bin/xfce4-terminal --disable-server --title=bh-env:%s\n' \
-        "${environment_name}"
+    if [[ "${environment_mode}" == "mutable" ]]; then
+        printf 'Exec=/usr/bin/xfce4-terminal --disable-server '
+        printf '%s %s\n' "--title=bh-env:${environment_name}" \
+            "--command=${container_environment_shell_launcher}"
+    else
+        printf 'Exec=/usr/bin/xfce4-terminal --disable-server --title=bh-env:%s\n' \
+            "${environment_name}"
+    fi
     printf 'Terminal=false\n'
     printf 'Categories=System;TerminalEmulator;\n'
 } > "${session_home}/.local/share/applications/bh-env-terminal.desktop"
@@ -534,7 +592,9 @@ cp "${session_home}/.local/share/applications/bh-env-terminal.desktop" \
 chmod 700 "${session_home}/Desktop/Environment Terminal.desktop"
 
 if [[ "${environment_mode}" == "mutable" ]]; then
-    rm -f "${session_home}/Desktop/MATLAB R2026a.desktop"
+    rm -f \
+        "${session_home}/Desktop/MATLAB R2024b.desktop" \
+        "${session_home}/Desktop/MATLAB R2026a.desktop"
     {
         printf '[Desktop Entry]\n'
         printf 'Version=1.0\n'
@@ -575,17 +635,17 @@ if [[ "${environment_mode}" == "mutable" ]]; then
         printf '[Desktop Entry]\n'
         printf 'Version=1.0\n'
         printf 'Type=Application\n'
-        printf 'Name=MATLAB R2024b\n'
+        printf 'Name=MATLAB R2025b\n'
         printf 'Icon=matlab\n'
-        printf 'Exec=/opt/matlab/R2024b/bin/matlab -desktop\n'
+        printf 'Exec=%s\n' "${container_environment_matlab_launcher}"
         printf 'Terminal=false\n'
         printf 'Categories=Development;Science;\n'
-    } > "${session_home}/Desktop/MATLAB R2024b.desktop"
+    } > "${session_home}/Desktop/MATLAB R2025b.desktop"
     chmod 700 \
         "${session_home}/Desktop/Environment Admin Terminal.desktop" \
         "${session_home}/Desktop/Google Chrome.desktop" \
         "${session_home}/Desktop/ChatGPT.desktop" \
-        "${session_home}/Desktop/MATLAB R2024b.desktop"
+        "${session_home}/Desktop/MATLAB R2025b.desktop"
 fi
 
 {
