@@ -42,6 +42,7 @@ app_server_launcher_process_id=""
 app_server_process_id=""
 app_server_process_cgroup="unavailable"
 app_server_updater_process_id=""
+app_server_restart_marker="${service_directory}/app-server-restarted"
 app_server_status="NOT_STARTED"
 migration_status="NOT_STARTED"
 
@@ -557,19 +558,24 @@ process_belongs_to_job "${opencodex_launcher_process_id}" || {
 }
 
 write_service_state "STARTING_CODEX_APP_SERVER"
+rm -f "${app_server_restart_marker}"
 run_in_container /bin/bash -c '
         set -Eeuo pipefail
         managed_codex="$1"
+        restart_marker="$2"
         if [[ ! -s "${CODEX_HOME}/app-server-daemon/settings.json" ]]; then
             "${managed_codex}" app-server daemon bootstrap --remote-control
         fi
         "${managed_codex}" app-server daemon restart
+        temporary_restart_marker="${restart_marker}.tmp.$$"
+        printf "READY\n" > "${temporary_restart_marker}"
+        mv "${temporary_restart_marker}" "${restart_marker}"
         while "${managed_codex}" app-server daemon version |
                 grep -Eq '\''"status"[[:space:]]*:[[:space:]]*"running"'\''; do
             sleep 5
         done
         exit 1
-    ' -- "${managed_codex_executable}" \
+    ' -- "${managed_codex_executable}" "${app_server_restart_marker}" \
     >> "${service_log_file}" 2>&1 &
 app_server_launcher_process_id=$!
 
@@ -582,7 +588,8 @@ for ((attempt_number = 1; attempt_number <= 60; attempt_number++)); do
             "${service_log_file}" >&2
         exit 5
     fi
-    if [[ -s "${app_server_pid_file}" &&
+    if [[ -s "${app_server_restart_marker}" &&
+          -s "${app_server_pid_file}" &&
           -S "${app_server_control_socket}" ]]; then
         app_server_process_id="$(
             read_json_integer "$(head -n 1 "${app_server_pid_file}")" pid

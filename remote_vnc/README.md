@@ -29,6 +29,9 @@ Apptainer service instance and supervises `ocx start` and the Codex app-server
 daemon inside it. Host-side `ocx` and `codex` wrappers join this instance so all
 service commands share its PID namespace. The VNC job is reported ready only
 after the instance and both services pass their health and cgroup checks.
+`remote_vnc_job_sshd.sh` permits forwarding only to the active VNC and
+OpenCodex loopback ports; the Mac-side launcher verifies the dashboard through
+`http://127.0.0.1:10102` before reporting success.
 
 `bh-env.sh` provides interactive shells, command execution, Slurm submission,
 checkpoints, restore, and clean rebuilds. `bh-env sbatch` copies the original

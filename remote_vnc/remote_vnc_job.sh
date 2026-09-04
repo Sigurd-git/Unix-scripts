@@ -14,7 +14,7 @@ environment_name="${8:-default}"
 environment_mode="${9:-mutable}"
 environment_build_timeout_seconds="${10:-10800}"
 
-launcher_version="6"
+launcher_version="8"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${job_id}"
@@ -300,11 +300,24 @@ done
 
 vnc_port="$(read_state_value "${vnc_connection_file}" VNC_PORT)"
 vnc_node="$(read_state_value "${vnc_connection_file}" NODE)"
+opencodex_port="$(
+    read_state_value "${vnc_connection_file}" OPENCODEX_PORT || true
+)"
+if [[ "${environment_mode}" == "mutable" ]]; then
+    [[ "${opencodex_port}" =~ ^[1-9][0-9]*$ &&
+       ${opencodex_port} -le 65535 ]] || {
+        printf 'VNC returned an invalid OpenCodex port: %s\n' \
+            "${opencodex_port:-unset}" >&2
+        exit 3
+    }
+else
+    opencodex_port=""
+fi
 write_launcher_state "STARTING_SSH"
 
 "${remote_sshd_helper}" \
     "${user_service_directory}" "${job_id}" "${vnc_node}" "${vnc_port}" \
-    "${authorized_keys_file}" &
+    "${authorized_keys_file}" "${opencodex_port}" &
 remote_ssh_launcher_process_id=$!
 write_launcher_state "STARTING_SSH"
 
@@ -326,6 +339,7 @@ for ((attempt_number = 1; attempt_number <= 60; attempt_number++)); do
        [[ "$(read_state_value "${remote_ssh_connection_file}" JOB_ID || true)" == "${job_id}" ]] &&
        [[ "$(read_state_value "${remote_ssh_connection_file}" NODE || true)" == "${vnc_node}" ]] &&
        [[ "$(read_state_value "${remote_ssh_connection_file}" VNC_PORT || true)" == "${vnc_port}" ]] &&
+       [[ "$(read_state_value "${remote_ssh_connection_file}" OPENCODEX_PORT || true)" == "${opencodex_port}" ]] &&
        [[ "$(read_state_value "${remote_ssh_connection_file}" SSH_PORT || true)" =~ ^[0-9]+$ ]]; then
         remote_ssh_ready=true
         break
@@ -338,8 +352,9 @@ done
 }
 
 write_launcher_state "READY"
-printf 'REMOTE_VNC_JOB_READY job=%s node=%s vnc_port=%s ssh_port=%s\n' \
+printf 'REMOTE_VNC_JOB_READY job=%s node=%s vnc_port=%s opencodex_port=%s ssh_port=%s\n' \
     "${job_id}" "${vnc_node}" "${vnc_port}" \
+    "${opencodex_port:-disabled}" \
     "$(read_state_value "${remote_ssh_connection_file}" SSH_PORT)"
 
 while kill -0 "${vnc_launcher_process_id}" 2>/dev/null &&

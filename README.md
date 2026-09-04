@@ -461,6 +461,16 @@ ssh blhc3 'ocx ready --json'
 ssh blhc3 'codex app-server daemon version'
 ```
 
+The same managed SSH connection exposes the OpenCodex dashboard on the Mac:
+
+```text
+http://127.0.0.1:10102
+```
+
+The job SSH server permits forwarding only to the active loopback VNC and
+OpenCodex ports. `remote_vnc.sh` checks the dashboard over this tunnel before
+reporting startup success.
+
 The VNC desktop and service instance use the same sandbox and persistent HOME.
 The separate instance exists only so long-lived OpenCodex and app-server
 processes, later SSH commands, and Codex App all see the same PID namespace.

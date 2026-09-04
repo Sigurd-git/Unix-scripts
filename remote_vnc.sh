@@ -20,6 +20,7 @@ image_build_timeout_seconds=1800
 environment_build_timeout_seconds=10800
 environment_name="default"
 environment_mode="mutable"
+local_opencodex_port=10102
 
 start_ssh_control_script="${script_directory}/start_ssh_control.sh"
 read_user_password_script="${script_directory}/read_user_password.sh"
@@ -182,7 +183,7 @@ if [[ -n "${requested_node}" ]]; then
         fail "invalid node name: ${requested_node}"
 fi
 
-for required_command in ssh scp ssh-keygen lsof nc awk sed mktemp launchctl plutil; do
+for required_command in ssh scp ssh-keygen lsof nc curl awk sed mktemp launchctl plutil; do
     command -v "${required_command}" >/dev/null 2>&1 ||
         fail "required command is unavailable: ${required_command}"
 done
@@ -221,7 +222,7 @@ launch_agent_file="${launch_agent_directory}/${launch_agent_label}.plist"
 launch_agent_stdout="${HOME}/Library/Logs/remote-vnc-${cluster_name}.out.log"
 launch_agent_stderr="${HOME}/Library/Logs/remote-vnc-${cluster_name}.err.log"
 remote_requested_node="${requested_node:-__REMOTE_VNC_SCHEDULER__}"
-managed_launcher_comment="remote-vnc-managed-v6:${environment_name}:${environment_mode}"
+managed_launcher_comment="remote-vnc-managed-v8:${environment_name}:${environment_mode}"
 
 login_control_path="$(
     /usr/bin/ssh -G "${login_host_alias}" 2>/dev/null |
@@ -451,7 +452,7 @@ restart_existing_job="${16}"
 environment_name="${17}"
 environment_mode="${18}"
 environment_build_timeout_seconds="${19}"
-managed_launcher_version="6"
+managed_launcher_version="8"
 
 if [[ "${requested_node}" == "__REMOTE_VNC_SCHEDULER__" ]]; then
     requested_node=""
@@ -551,7 +552,7 @@ job_uses_managed_launcher() {
         tr ' ' '\n' <<< "${job_record}" |
             awk -F= '$1 == "Comment" { print $2; exit }'
     )"
-    [[ "${job_comment}" == remote-vnc-managed-v6:* ]]
+    [[ "${job_comment}" == remote-vnc-managed-v8:* ]]
 }
 
 managed_launcher_is_ready() {
@@ -893,20 +894,35 @@ remote_ssh_is_ready() {
     local connection_job_id
     local connection_node
     local connection_vnc_port
+    local connection_opencodex_port
     local connection_ssh_port
+    local expected_opencodex_port
 
     connection_status="$(read_state_value "${remote_ssh_connection_file}" STATUS || true)"
     connection_job_id="$(read_state_value "${remote_ssh_connection_file}" JOB_ID || true)"
     connection_node="$(read_state_value "${remote_ssh_connection_file}" NODE || true)"
     connection_vnc_port="$(read_state_value "${remote_ssh_connection_file}" VNC_PORT || true)"
+    connection_opencodex_port="$(
+        read_state_value "${remote_ssh_connection_file}" OPENCODEX_PORT || true
+    )"
     connection_ssh_port="$(read_state_value "${remote_ssh_connection_file}" SSH_PORT || true)"
+    expected_opencodex_port="$(
+        read_state_value "${connection_file}" OPENCODEX_PORT || true
+    )"
 
     [[ "${connection_status}" == "READY" ]] &&
         [[ "${connection_job_id}" == "${job_id}" ]] &&
         [[ "${connection_node}" == "${vnc_node}" ]] &&
         [[ "${connection_vnc_port}" == "${vnc_port}" ]] &&
         [[ "${connection_ssh_port}" =~ ^[0-9]+$ ]] &&
-        tcp_port_is_open "${vnc_node}" "${connection_ssh_port}"
+        tcp_port_is_open "${vnc_node}" "${connection_ssh_port}" || return 1
+
+    if [[ "${environment_mode}" == "mutable" ]]; then
+        [[ "${expected_opencodex_port}" =~ ^[0-9]+$ &&
+           "${connection_opencodex_port}" == "${expected_opencodex_port}" ]]
+    else
+        [[ -z "${connection_opencodex_port}" ]]
+    fi
 }
 
 remote_ssh_is_ready || {
@@ -1125,6 +1141,27 @@ wait_for_local_vnc_rfb() {
     return 1
 }
 
+local_opencodex_http_is_ready() {
+    local requested_port="$1"
+
+    /usr/bin/curl \
+        --fail --silent --show-error \
+        --noproxy '*' \
+        --connect-timeout 3 --max-time 5 \
+        "http://127.0.0.1:${requested_port}/" \
+        --output /dev/null 2>/dev/null
+}
+
+wait_for_local_opencodex_http() {
+    local requested_port="$1"
+
+    for _ in {1..30}; do
+        local_opencodex_http_is_ready "${requested_port}" && return 0
+        sleep 1
+    done
+    return 1
+}
+
 read_local_state_value() {
     local requested_key="$1"
 
@@ -1330,6 +1367,30 @@ wait_for_local_vnc_rfb "${local_vnc_port}" || {
     fail "local VNC tunnel on port ${local_vnc_port} did not return an RFB banner"
 }
 
+if [[ "${active_environment_mode}" == "mutable" ]]; then
+    opencodex_forward_specification="127.0.0.1:${local_opencodex_port}"
+    opencodex_forward_specification+=":127.0.0.1:${active_opencodex_port}"
+    if ! listener_uses_ssh_master "${local_opencodex_port}"; then
+        [[ -z "$(local_listener_process_ids "${local_opencodex_port}")" ]] ||
+            fail "local OpenCodex port ${local_opencodex_port} is already in use"
+        log_message \
+            "Adding OpenCodex forwarding on localhost:${local_opencodex_port}..."
+        /usr/bin/ssh \
+            -S "${ssh_control_path}" \
+            -O forward \
+            -L "${opencodex_forward_specification}" \
+            "${vnc_ssh_alias}" || fail "could not create the OpenCodex tunnel"
+    fi
+    listener_uses_ssh_master "${local_opencodex_port}" ||
+        fail "SSH did not listen on local OpenCodex port ${local_opencodex_port}"
+    wait_for_local_opencodex_http "${local_opencodex_port}" || {
+        tail -n 80 "${launch_agent_stderr}" >&2 2>/dev/null || true
+        fail "OpenCodex dashboard did not respond on localhost:${local_opencodex_port}"
+    }
+else
+    local_opencodex_port=""
+fi
+
 validation_record="$(
     /usr/bin/ssh \
         -o BatchMode=yes \
@@ -1415,6 +1476,7 @@ local_state_temporary_file="$(mktemp "${local_connection_state_file}.XXXXXX")"
     printf 'REMOTE_SSH_PORT=%s\n' "${remote_ssh_port}"
     printf 'REMOTE_VNC_PORT=%s\n' "${remote_vnc_port}"
     printf 'LOCAL_VNC_PORT=%s\n' "${local_vnc_port}"
+    printf 'LOCAL_OPENCODEX_PORT=%s\n' "${local_opencodex_port}"
     printf 'REMOTE_SHARED_ROOT=%s\n' "${REMOTE_SHARED_ROOT}"
     printf 'REMOTE_VNC_USER_DIRECTORY=%s\n' "${vnc_user_service_directory}"
     printf 'ENVIRONMENT_NAME=%s\n' "${active_environment_name}"
@@ -1458,6 +1520,8 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
     log_message \
         "Codex app server=${active_codex_app_server_status}" \
         "PID=${active_codex_app_server_process_id}"
+    log_message \
+        "OpenCodex dashboard: http://127.0.0.1:${local_opencodex_port}"
 fi
 log_message "VNC address: ${vnc_url}"
 log_message \

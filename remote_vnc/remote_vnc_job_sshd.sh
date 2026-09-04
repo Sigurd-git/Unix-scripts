@@ -8,6 +8,7 @@ expected_job_id="${2:?job ID is required}"
 expected_node="${3:?node is required}"
 vnc_port="${4:?VNC port is required}"
 authorized_keys_file="${5:?authorized keys file is required}"
+opencodex_port="${6:-}"
 current_user="$(id -un)"
 
 [[ "${SLURM_JOB_ID:-}" == "${expected_job_id}" ]] || {
@@ -24,6 +25,13 @@ current_user="$(id -un)"
     printf 'Invalid VNC port: %s\n' "${vnc_port}" >&2
     exit 2
 }
+if [[ -n "${opencodex_port}" ]]; then
+    [[ "${opencodex_port}" =~ ^[1-9][0-9]*$ &&
+       ${opencodex_port} -le 65535 ]] || {
+        printf 'Invalid OpenCodex port: %s\n' "${opencodex_port}" >&2
+        exit 2
+    }
+fi
 [[ -s "${authorized_keys_file}" ]] || {
     printf 'Authorized key file is missing: %s\n' "${authorized_keys_file}" >&2
     exit 2
@@ -88,6 +96,18 @@ port_is_listening() {
     '
 }
 
+if [[ -n "${opencodex_port}" ]] &&
+   ! port_is_listening "${opencodex_port}"; then
+    printf 'OpenCodex port is not listening: 127.0.0.1:%s\n' \
+        "${opencodex_port}" >&2
+    exit 2
+fi
+
+permit_open_targets="127.0.0.1:${vnc_port}"
+if [[ -n "${opencodex_port}" ]]; then
+    permit_open_targets+=" 127.0.0.1:${opencodex_port}"
+fi
+
 choose_remote_ssh_port() {
     local candidate_port
     local first_candidate_port=$((44000 + SLURM_JOB_ID % 500))
@@ -123,6 +143,7 @@ write_connection_state() {
         printf 'SSH_PORT=%s\n' "${ssh_port_value}"
         printf 'SSHD_PID=%s\n' "${sshd_process_id}"
         printf 'VNC_PORT=%s\n' "${vnc_port}"
+        printf 'OPENCODEX_PORT=%s\n' "${opencodex_port}"
         printf 'HOST_KEY_PUBLIC_FILE=%s\n' "${host_shell_server_key}.pub"
         printf 'LOG=%s\n' "${remote_ssh_log_file}"
         printf 'CGROUP=%s\n' "${cgroup_path}"
@@ -177,7 +198,7 @@ write_connection_state "STARTING" "${remote_ssh_port}"
     -o AllowAgentForwarding=no \
     -o AllowStreamLocalForwarding=no \
     -o AllowTcpForwarding=local \
-    -o "PermitOpen=127.0.0.1:${vnc_port}" \
+    -o "PermitOpen=${permit_open_targets}" \
     -o PermitTunnel=no \
     -o GatewayPorts=no \
     -o PermitUserEnvironment=no \
