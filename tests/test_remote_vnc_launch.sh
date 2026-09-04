@@ -62,7 +62,7 @@ flock -u 9
 exec 9>&-
 expect_failure 42 run_job
 [[ -e "${TEST_IMAGE_MARKER}" ]]
-grep -q '^LAUNCHER_VERSION=14$' "${service_directory}/state/jobs/900001/managed-launcher.env"
+grep -q '^LAUNCHER_VERSION=15$' "${service_directory}/state/jobs/900001/managed-launcher.env"
 flock -n "${service_directory}/state/allocation.lock" true
 printf 'PASS: duplicate allocation rejected before image preparation; lock released on exit\n'
 
@@ -86,7 +86,7 @@ run_remote_start() {
         "${repository_directory}/remote_vnc/remote_vnc_job.sh" \
         "${release_directory}/remote_vnc_job_sshd.sh" \
         "${release_directory}/authorized_keys" \
-        remote-vnc-managed-v14:default:mutable:44422:2560x1440 \
+        remote-vnc-managed-v15:default:mutable:44422:2560x1440 \
         false default mutable 1 44422 2560x1440
 }
 

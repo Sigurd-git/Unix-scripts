@@ -567,6 +567,7 @@ run_in_container /bin/bash -c '
         set -Eeuo pipefail
         managed_codex="$1"
         restart_marker="$2"
+        expected_job_id="$3"
         if [[ ! -s "${CODEX_HOME}/app-server-daemon/settings.json" ]]; then
             "${managed_codex}" app-server daemon bootstrap --remote-control
         fi
@@ -574,12 +575,36 @@ run_in_container /bin/bash -c '
         temporary_restart_marker="${restart_marker}.tmp.$$"
         printf "READY\n" > "${temporary_restart_marker}"
         mv "${temporary_restart_marker}" "${restart_marker}"
-        while "${managed_codex}" app-server daemon version |
-                grep -Eq '\''"status"[[:space:]]*:[[:space:]]*"running"'\''; do
+        # The version command opens an RPC connection and can time out while
+        # the daemon is busy. A failed query must not terminate the desktop.
+        daemon_pid_file="${CODEX_HOME}/app-server-daemon/app-server.pid"
+        missing_process_since=-1
+        while true; do
+            daemon_process_id="$(jq -r ".pid // empty" "${daemon_pid_file}" 2>/dev/null || true)"
+            if [[ "${daemon_process_id}" =~ ^[0-9]+$ ]] &&
+               kill -0 "${daemon_process_id}" 2>/dev/null &&
+               grep -Fq "/job_${expected_job_id}/step_batch/" \
+                   "/proc/${daemon_process_id}/cgroup" 2>/dev/null; then
+                if ((missing_process_since >= 0)); then
+                    printf "%s Codex daemon process is running again (PID %s).\n" \
+                        "$(date --iso-8601=seconds)" "${daemon_process_id}"
+                fi
+                missing_process_since=-1
+            else
+                if ((missing_process_since < 0)); then
+                    missing_process_since=${SECONDS}
+                    printf "%s Codex daemon process is missing; allowing 60 seconds for a restart.\n" \
+                        "$(date --iso-8601=seconds)" >&2
+                fi
+                if ((SECONDS - missing_process_since >= 60)); then
+                    printf "%s Codex daemon has no live process in Slurm Job %s after 60 seconds.\n" \
+                        "$(date --iso-8601=seconds)" "${expected_job_id}" >&2
+                    exit 1
+                fi
+            fi
             sleep 5
         done
-        exit 1
-    ' -- "${managed_codex_executable}" "${app_server_restart_marker}" \
+    ' -- "${managed_codex_executable}" "${app_server_restart_marker}" "${job_id}" \
     >> "${service_log_file}" 2>&1 &
 app_server_launcher_process_id=$!
 

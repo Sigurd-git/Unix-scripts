@@ -16,7 +16,7 @@ environment_build_timeout_seconds="${10:-10800}"
 requested_remote_ssh_port="${11:?fixed remote SSH port is required}"
 vnc_geometry="${12:-2560x1440}"
 
-launcher_version="14"
+launcher_version="15"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${job_id}"

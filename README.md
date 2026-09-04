@@ -158,7 +158,7 @@ For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.
 ./deploy_remote_tools.sh -a bluehive3 --vnc
 
 # Start VNC, OpenCodex, Codex app-server, and a Slurm-bound SSH shell
-./remote_vnc.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
+./remote_vnc.sh -a bluehive3 -p doppelbock -c 8 -g 0 -m 64 -t 120
 
 # Use a named persistent environment
 ./remote_vnc.sh --env analysis --restart

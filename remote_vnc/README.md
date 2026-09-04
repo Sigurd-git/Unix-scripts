@@ -48,6 +48,10 @@ into every container and points `CODEX_SQLITE_HOME` to the host `.codex` state.
 The host is therefore the canonical live session store. The VNC job is reported
 ready only after the instance, both services, and the host-session mounts pass
 their health and cgroup checks.
+After startup, the daemon monitor checks the PID file and Slurm cgroup without
+opening repeated RPC connections. A busy daemon can time out an RPC status
+query while its process is still running. A missing process gets 60 seconds to
+return during a restart before the launcher treats it as a service failure.
 For mutable environments, `remote_vnc_job_sshd.sh` starts the public SSH server
 inside the read-only sandbox. `ssh blhc3` therefore opens Fish directly in the
 container, while SFTP, VNC forwarding, and OpenCodex forwarding use the same

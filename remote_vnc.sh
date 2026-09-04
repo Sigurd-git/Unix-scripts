@@ -7,10 +7,10 @@ source "${script_directory}/cluster_helpers.sh"
 
 cluster_name="bluehive3"
 partition_name="doppelbock"
-cpu_count=16
-gpu_count=1
-memory_gb=256
-time_hours=24
+cpu_count=8
+gpu_count=0
+memory_gb=64
+time_hours=120
 requested_node=""
 root_override=""
 open_vnc_viewer=true
@@ -48,10 +48,10 @@ reported.
 Options:
   -p, --partition PARTITION  Slurm partition (default: doppelbock)
   -a, --cluster CLUSTER      Cluster name (default: bluehive3)
-  -c, --cpus CPUS            CPUs for a new job (default: 16)
-  -g, --gpus GPUS            GPUs for a new job; 0 disables GPUs (default: 1)
-  -m, --memory MEMORY        Memory in GiB for a new job (default: 256)
-  -t, --time HOURS           Time limit in hours for a new job (default: 24)
+  -c, --cpus CPUS            CPUs for a new job (default: 8)
+  -g, --gpus GPUS            GPUs for a new job; 0 disables GPUs (default: 0)
+  -m, --memory MEMORY        Memory in GiB for a new job (default: 64)
+  -t, --time HOURS           Time limit in hours for a new job (default: 120)
   -w, --node NODE            Request a specific compute node
   -r, --root PATH            Override REMOTE_SHARED_ROOT
   --env NAME                 Persistent environment name (default: default)
@@ -298,7 +298,7 @@ configured_remote_ssh_port="${REMOTE_VNC_SSH_PORT}"
 [[ "${configured_remote_ssh_port}" =~ ^[0-9]+$ ]] &&
     ((configured_remote_ssh_port >= 44000 && configured_remote_ssh_port <= 44999)) ||
     fail "line 4 of ${USER_PASSWORD_FILE} must be a port from 44000 to 44999"
-managed_launcher_comment="remote-vnc-managed-v14:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
+managed_launcher_comment="remote-vnc-managed-v15:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
 
 CLUSTER="${cluster_name}"
 HOSTNAME="$(cluster_hostname "${cluster_name}")" || exit 1
@@ -591,7 +591,7 @@ environment_mode="${18}"
 environment_build_timeout_seconds="${19}"
 requested_remote_ssh_port="${20}"
 vnc_geometry="${21}"
-managed_launcher_version="14"
+managed_launcher_version="15"
 
 if [[ "${requested_node}" == "__REMOTE_VNC_SCHEDULER__" ]]; then
     requested_node=""
@@ -713,7 +713,7 @@ job_uses_managed_launcher() {
         tr ' ' '\n' <<< "${job_record}" |
             awk -F= '$1 == "Comment" { print $2; exit }'
     )"
-    [[ "${job_comment}" == remote-vnc-managed-v14:* ]]
+    [[ "${job_comment}" == remote-vnc-managed-v15:* ]]
 }
 
 managed_launcher_is_ready() {
