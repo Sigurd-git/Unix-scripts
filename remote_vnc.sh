@@ -20,6 +20,7 @@ image_build_timeout_seconds=1800
 environment_build_timeout_seconds=10800
 environment_name="default"
 environment_mode="mutable"
+vnc_geometry="2560x1440"
 local_opencodex_port=10102
 
 start_ssh_control_script="${script_directory}/start_ssh_control.sh"
@@ -54,6 +55,7 @@ Options:
   -w, --node NODE            Request a specific compute node
   -r, --root PATH            Override REMOTE_SHARED_ROOT
   --env NAME                 Persistent environment name (default: default)
+  --geometry WIDTHxHEIGHT    VNC framebuffer size (default: 2560x1440)
   --immutable                Run the original read-only VNC image
   --restart     Replace the current VNC job with a newly managed job
   --no-open     Prepare SSH and VNC without opening Screen Sharing
@@ -61,6 +63,9 @@ Options:
 
 After startup:
   ssh blhc3
+
+Configuration:
+  user_password.txt line 4  Fixed remote SSH port (44000-44999; auto-created)
 EOF
 }
 
@@ -142,6 +147,16 @@ while [[ $# -gt 0 ]]; do
             [[ -n "${environment_name}" ]] || fail "--env requires a value"
             shift
             ;;
+        --geometry)
+            require_option_value "$1" "${2:-}"
+            vnc_geometry="$2"
+            shift 2
+            ;;
+        --geometry=*)
+            vnc_geometry="${1#*=}"
+            [[ -n "${vnc_geometry}" ]] || fail "--geometry requires a value"
+            shift
+            ;;
         --immutable)
             environment_mode="immutable"
             shift
@@ -178,12 +193,21 @@ require_cluster "${cluster_name}" || exit 1
 [[ "${time_hours}" =~ ^[1-9][0-9]*$ ]] || fail "HOURS must be a positive integer"
 [[ "${environment_name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
     fail "invalid environment name: ${environment_name}"
+if [[ "${vnc_geometry}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    vnc_width="${BASH_REMATCH[1]}"
+    vnc_height="${BASH_REMATCH[2]}"
+else
+    fail "invalid VNC geometry: ${vnc_geometry} (expected WIDTHxHEIGHT)"
+fi
+((vnc_width >= 1024 && vnc_width <= 7680 &&
+  vnc_height >= 768 && vnc_height <= 4320)) ||
+    fail "VNC geometry must be between 1024x768 and 7680x4320"
 if [[ -n "${requested_node}" ]]; then
     [[ "${requested_node}" =~ ^[A-Za-z0-9._-]+$ ]] ||
         fail "invalid node name: ${requested_node}"
 fi
 
-for required_command in ssh scp sftp ssh-keygen lsof nc curl awk sed mktemp launchctl plutil; do
+for required_command in ssh scp sftp ssh-keygen lsof nc curl awk sed cksum mktemp launchctl plutil; do
     command -v "${required_command}" >/dev/null 2>&1 ||
         fail "required command is unavailable: ${required_command}"
 done
@@ -222,7 +246,6 @@ launch_agent_file="${launch_agent_directory}/${launch_agent_label}.plist"
 launch_agent_stdout="${HOME}/Library/Logs/remote-vnc-${cluster_name}.out.log"
 launch_agent_stderr="${HOME}/Library/Logs/remote-vnc-${cluster_name}.err.log"
 remote_requested_node="${requested_node:-__REMOTE_VNC_SCHEDULER__}"
-managed_launcher_comment="remote-vnc-managed-v9:${environment_name}:${environment_mode}"
 
 login_control_path="$(
     /usr/bin/ssh -G "${login_host_alias}" 2>/dev/null |
@@ -264,11 +287,18 @@ ensure_login_control_master() {
 }
 
 export PASSWORD="${PASSWORD:-}"
+READ_USER_PASSWORD_INITIALIZE_VNC_PORT=true
 # shellcheck disable=SC1090
 source "${read_user_password_script}"
+unset READ_USER_PASSWORD_INITIALIZE_VNC_PORT
 remote_user_name="${USER}"
 [[ "${remote_user_name}" =~ ^[A-Za-z0-9._-]+$ ]] ||
     fail "invalid remote user name: ${remote_user_name}"
+configured_remote_ssh_port="${REMOTE_VNC_SSH_PORT}"
+[[ "${configured_remote_ssh_port}" =~ ^[0-9]+$ ]] &&
+    ((configured_remote_ssh_port >= 44000 && configured_remote_ssh_port <= 44999)) ||
+    fail "line 4 of ${USER_PASSWORD_FILE} must be a port from 44000 to 44999"
+managed_launcher_comment="remote-vnc-managed-v12:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
 
 CLUSTER="${cluster_name}"
 HOSTNAME="$(cluster_hostname "${cluster_name}")" || exit 1
@@ -284,7 +314,14 @@ log_message \
     "GPUs=${gpu_count} memory=${memory_gb}G time=${time_hours}h" \
     "node=${requested_node:-scheduler}"
 log_message "Environment=${environment_name} mode=${environment_mode}"
+log_message "VNC geometry=${vnc_geometry}"
 log_message "REMOTE_SHARED_ROOT=${REMOTE_SHARED_ROOT}"
+if [[ "${REMOTE_VNC_SSH_PORT_CREATED}" == "true" ]]; then
+    log_message \
+        "Saved fixed remote SSH port ${configured_remote_ssh_port} to line 4 of ${USER_PASSWORD_FILE}."
+else
+    log_message "Fixed remote SSH port=${configured_remote_ssh_port}"
+fi
 ensure_login_control_master
 
 REMOTE_TOOLS_CONTROL_PATH="${login_control_path}"
@@ -312,6 +349,7 @@ private_directories=(
     "${user_service_directory}"
     "${user_service_directory}/state"
     "${user_service_directory}/state/jobs"
+    "${user_service_directory}/state/remote-ssh"
     "${user_service_directory}/state/sbatch"
     "${user_service_directory}/logs"
     "${user_service_directory}/images"
@@ -321,6 +359,103 @@ private_directories=(
 mkdir -p "${private_directories[@]}"
 chmod 700 "${private_directories[@]}"
 chmod g-s "${private_directories[@]}"
+
+persistent_ssh_directory="${user_service_directory}/state/remote-ssh"
+persistent_server_key="${persistent_ssh_directory}/server-key"
+persistent_server_public_key="${persistent_server_key}.pub"
+persistent_server_key_lock="${persistent_ssh_directory}/server-key.lock"
+temporary_key_directory=""
+
+cleanup_temporary_key_directory() {
+    if [[ -n "${temporary_key_directory}" &&
+          -d "${temporary_key_directory}" ]]; then
+        rm -f \
+            "${temporary_key_directory}/server-key" \
+            "${temporary_key_directory}/server-key.pub"
+        rmdir "${temporary_key_directory}" 2>/dev/null || true
+    fi
+}
+trap cleanup_temporary_key_directory EXIT
+
+validate_persistent_server_key() {
+    local derived_public_key
+    local recorded_public_key
+
+    [[ -s "${persistent_server_key}" &&
+       -s "${persistent_server_public_key}" ]] || return 1
+    ssh-keygen -lf "${persistent_server_key}" >/dev/null 2>&1 || return 1
+    ssh-keygen -lf "${persistent_server_public_key}" >/dev/null 2>&1 || return 1
+    derived_public_key="$(
+        ssh-keygen -y -f "${persistent_server_key}" |
+            awk 'NF >= 2 { print $1 " " $2; exit }'
+    )" || return 1
+    recorded_public_key="$(
+        awk 'NF >= 2 { print $1 " " $2; exit }' \
+            "${persistent_server_public_key}"
+    )"
+    [[ -n "${derived_public_key}" &&
+       "${derived_public_key}" == "${recorded_public_key}" ]]
+}
+
+exec 9> "${persistent_server_key_lock}"
+flock -w 30 9 || {
+    printf 'Timed out waiting for the persistent SSH host-key lock: %s\n' \
+        "${persistent_server_key_lock}" >&2
+    exit 2
+}
+
+[[ ! -L "${persistent_server_key}" &&
+   ! -L "${persistent_server_public_key}" ]] || {
+    printf 'Persistent SSH host-key files must not be symbolic links: %s\n' \
+        "${persistent_ssh_directory}" >&2
+    exit 2
+}
+
+if [[ ! -e "${persistent_server_key}" &&
+      ! -e "${persistent_server_public_key}" ]]; then
+    temporary_key_directory="$(
+        mktemp -d "${persistent_ssh_directory}/.server-key.XXXXXX"
+    )"
+    ssh-keygen -q -t ed25519 -N '' \
+        -f "${temporary_key_directory}/server-key"
+    chmod 600 "${temporary_key_directory}/server-key"
+    chmod 644 "${temporary_key_directory}/server-key.pub"
+    mv "${temporary_key_directory}/server-key" "${persistent_server_key}"
+    mv "${temporary_key_directory}/server-key.pub" \
+        "${persistent_server_public_key}"
+    rmdir "${temporary_key_directory}"
+    temporary_key_directory=""
+    persistent_server_key_status="created"
+elif [[ -s "${persistent_server_key}" &&
+        ! -e "${persistent_server_public_key}" ]]; then
+    temporary_key_directory="$(
+        mktemp -d "${persistent_ssh_directory}/.server-key.XXXXXX"
+    )"
+    ssh-keygen -y -f "${persistent_server_key}" \
+        > "${temporary_key_directory}/server-key.pub"
+    chmod 644 "${temporary_key_directory}/server-key.pub"
+    mv "${temporary_key_directory}/server-key.pub" \
+        "${persistent_server_public_key}"
+    rmdir "${temporary_key_directory}"
+    temporary_key_directory=""
+    persistent_server_key_status="repaired public key"
+elif [[ ! -s "${persistent_server_key}" ]]; then
+    printf 'Persistent SSH host-key private file is missing or empty: %s\n' \
+        "${persistent_server_key}" >&2
+    exit 2
+else
+    persistent_server_key_status="reused"
+fi
+
+chmod 600 "${persistent_server_key}" "${persistent_server_key_lock}"
+chmod 644 "${persistent_server_public_key}"
+validate_persistent_server_key || {
+    printf 'Persistent SSH host-key pair is invalid or mismatched under %s.\n' \
+        "${persistent_ssh_directory}" >&2
+    exit 2
+}
+printf '[remote-vnc] Persistent SSH host key %s: %s\n' \
+    "${persistent_server_key_status}" "${persistent_server_public_key}" >&2
 REMOTE_PREPARE
 
 /usr/bin/scp -q -O -o BatchMode=yes -o "ControlPath=${login_control_path}" \
@@ -430,7 +565,9 @@ ready_record="$(
         "${restart_existing_job}" \
         "${environment_name}" \
         "${environment_mode}" \
-        "${environment_build_timeout_seconds}" <<'REMOTE_START'
+        "${environment_build_timeout_seconds}" \
+        "${configured_remote_ssh_port}" \
+        "${vnc_geometry}" <<'REMOTE_START'
 set -Eeuo pipefail
 
 release_directory="$1"
@@ -452,7 +589,9 @@ restart_existing_job="${16}"
 environment_name="${17}"
 environment_mode="${18}"
 environment_build_timeout_seconds="${19}"
-managed_launcher_version="9"
+requested_remote_ssh_port="${20}"
+vnc_geometry="${21}"
+managed_launcher_version="12"
 
 if [[ "${requested_node}" == "__REMOTE_VNC_SCHEDULER__" ]]; then
     requested_node=""
@@ -471,6 +610,25 @@ fi
         "${environment_build_timeout_seconds}" >&2
     exit 2
 }
+[[ "${requested_remote_ssh_port}" =~ ^[0-9]+$ ]] &&
+    ((requested_remote_ssh_port >= 44000 && requested_remote_ssh_port <= 44999)) || {
+    printf 'Invalid fixed remote SSH port: %s\n' \
+        "${requested_remote_ssh_port}" >&2
+    exit 2
+}
+if [[ "${vnc_geometry}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    vnc_width="${BASH_REMATCH[1]}"
+    vnc_height="${BASH_REMATCH[2]}"
+else
+    printf 'Invalid VNC geometry: %s\n' "${vnc_geometry}" >&2
+    exit 2
+fi
+((vnc_width >= 1024 && vnc_width <= 7680 &&
+  vnc_height >= 768 && vnc_height <= 4320)) || {
+    printf 'VNC geometry must be between 1024x768 and 7680x4320: %s\n' \
+        "${vnc_geometry}" >&2
+    exit 2
+}
 
 slurm_binary_directory="/sfw/rhel9-x86_64/slurm/24.05.0.b1/bin"
 squeue_executable="${slurm_binary_directory}/squeue"
@@ -484,6 +642,8 @@ connection_file="${user_service_directory}/state/connection.env"
 
 for required_file in \
     "${release_directory}/start_vnc.sh" \
+    "${release_directory}/configure_desktop.sh" \
+    "${release_directory}/bluehive-aurora.svg" \
     "${release_directory}/build_vnc_image.sh" \
     "${release_directory}/bh-env.sh" \
     "${release_directory}/environment_common.sh" \
@@ -552,7 +712,7 @@ job_uses_managed_launcher() {
         tr ' ' '\n' <<< "${job_record}" |
             awk -F= '$1 == "Comment" { print $2; exit }'
     )"
-    [[ "${job_comment}" == remote-vnc-managed-v9:* ]]
+    [[ "${job_comment}" == remote-vnc-managed-v12:* ]]
 }
 
 managed_launcher_is_ready() {
@@ -568,10 +728,14 @@ managed_launcher_is_ready() {
        [[ "$(read_state_value "${launcher_state_file}" ENVIRONMENT_NAME || true)" == \
            "${environment_name}" ]] &&
        [[ "$(read_state_value "${launcher_state_file}" ENVIRONMENT_MODE || true)" == \
-           "${environment_mode}" ]]
+           "${environment_mode}" ]] &&
+       [[ "$(read_state_value "${launcher_state_file}" REMOTE_SSH_PORT || true)" == \
+           "${requested_remote_ssh_port}" ]] &&
+       [[ "$(read_state_value "${launcher_state_file}" VNC_GEOMETRY || true)" == \
+           "${vnc_geometry}" ]]
 }
 
-job_matches_requested_environment() {
+job_matches_requested_configuration() {
     local requested_job_id="$1"
     local launcher_state_file
     local job_record
@@ -581,7 +745,11 @@ job_matches_requested_environment() {
     if [[ "$(read_state_value "${launcher_state_file}" ENVIRONMENT_NAME || true)" == \
           "${environment_name}" ]] &&
        [[ "$(read_state_value "${launcher_state_file}" ENVIRONMENT_MODE || true)" == \
-          "${environment_mode}" ]]; then
+          "${environment_mode}" ]] &&
+       [[ "$(read_state_value "${launcher_state_file}" REMOTE_SSH_PORT || true)" == \
+          "${requested_remote_ssh_port}" ]] &&
+       [[ "$(read_state_value "${launcher_state_file}" VNC_GEOMETRY || true)" == \
+          "${vnc_geometry}" ]]; then
         return 0
     fi
 
@@ -632,9 +800,13 @@ vnc_connection_is_ready() {
         [[ "$(read_state_value "${connection_file}" VNC_PORT || true)" =~ ^[0-9]+$ ]] &&
         [[ "$(read_state_value "${connection_file}" ENVIRONMENT_NAME || true)" == \
            "${environment_name}" ]] &&
-        [[ "$(read_state_value "${connection_file}" ENVIRONMENT_MODE || true)" == \
+       [[ "$(read_state_value "${connection_file}" ENVIRONMENT_MODE || true)" == \
            "${environment_mode}" ]] &&
-        opencodex_connection_is_ready &&
+       [[ "$(read_state_value "${connection_file}" VNC_GEOMETRY || true)" == \
+           "${vnc_geometry}" ]] &&
+       [[ "$(read_state_value "${connection_file}" VNC_CLIPBOARD || true)" == \
+           "ENABLED" ]] &&
+       opencodex_connection_is_ready &&
         managed_launcher_is_ready "${requested_job_id}" &&
         [[ "${job_state}" == "RUNNING" ]]
 }
@@ -680,7 +852,7 @@ else
             }
             active_job_record=""
         elif job_uses_managed_launcher "${job_id}"; then
-            if job_matches_requested_environment "${job_id}"; then
+            if job_matches_requested_configuration "${job_id}"; then
                 printf '[remote-vnc] Waiting for existing VNC Job %s.\n' \
                     "${job_id}" >&2
             else
@@ -694,11 +866,23 @@ else
                         "$(managed_launcher_state_file "${job_id}")" \
                         ENVIRONMENT_MODE || true
                 )"
-                printf 'VNC Job %s uses environment %s (%s).\n' \
+                active_remote_ssh_port="$(
+                    read_state_value \
+                        "$(managed_launcher_state_file "${job_id}")" \
+                        REMOTE_SSH_PORT || true
+                )"
+                active_vnc_geometry="$(
+                    read_state_value \
+                        "$(managed_launcher_state_file "${job_id}")" \
+                        VNC_GEOMETRY || true
+                )"
+                printf 'VNC Job %s uses environment %s (%s), SSH port %s, and geometry %s.\n' \
                     "${job_id}" \
                     "${active_environment_name:-unknown}" \
-                    "${active_environment_mode:-unknown}" >&2
-                printf 'Run remote_vnc.sh --restart with the requested environment.\n' \
+                    "${active_environment_mode:-unknown}" \
+                    "${active_remote_ssh_port:-unknown}" \
+                    "${active_vnc_geometry:-unknown}" >&2
+                printf 'Run remote_vnc.sh --restart with the requested configuration.\n' \
                     >&2
                 exit 7
             fi
@@ -759,7 +943,7 @@ else
 
         mkdir -p "${user_service_directory}/logs"
         printf -v job_wrap_command \
-            'exec %q %q %q %q %q %q %q %q %q %q %q' \
+            'exec %q %q %q %q %q %q %q %q %q %q %q %q %q' \
             "${remote_job_launcher_file}" \
             "${release_directory}" \
             "${user_service_directory}" \
@@ -770,7 +954,9 @@ else
             "${image_build_timeout_seconds}" \
             "${environment_name}" \
             "${environment_mode}" \
-            "${environment_build_timeout_seconds}"
+            "${environment_build_timeout_seconds}" \
+            "${requested_remote_ssh_port}" \
+            "${vnc_geometry}"
         job_id="$(
             "${sbatch_executable}" "${submit_options[@]}" \
                 --wrap="${job_wrap_command}"
@@ -937,7 +1123,7 @@ remote_ssh_is_ready() {
         [[ "${connection_environment_name}" == "${environment_name}" ]] &&
         [[ "${connection_environment_generation}" == \
            "$(read_state_value "${connection_file}" ENVIRONMENT_GENERATION)" ]] &&
-        [[ "${connection_ssh_port}" =~ ^[0-9]+$ ]] &&
+        [[ "${connection_ssh_port}" == "${requested_remote_ssh_port}" ]] &&
         tcp_port_is_open "${vnc_node}" "${connection_ssh_port}" || return 1
 
     if [[ "${environment_mode}" == "mutable" ]]; then
@@ -975,12 +1161,13 @@ remote_sftp_status="$(
 host_key_public_file="$(
     read_state_value "${remote_ssh_connection_file}" HOST_KEY_PUBLIC_FILE
 )"
-[[ "${remote_ssh_port}" =~ ^[0-9]+$ ]] || {
-    printf 'Invalid remote SSH port: %s\n' "${remote_ssh_port}" >&2
+[[ "${remote_ssh_port}" == "${requested_remote_ssh_port}" ]] || {
+    printf 'Remote SSH port %s does not match configured port %s.\n' \
+        "${remote_ssh_port:-unset}" "${requested_remote_ssh_port}" >&2
     exit 6
 }
 [[ "${host_key_public_file}" == \
-   "${user_service_directory}/state/jobs/${job_id}/host-shell/server-key.pub" ]] || {
+   "${user_service_directory}/state/remote-ssh/server-key.pub" ]] || {
     printf 'Unexpected host-key path: %s\n' "${host_key_public_file}" >&2
     exit 6
 }
@@ -1003,6 +1190,9 @@ active_environment_name="$(read_state_value "${connection_file}" ENVIRONMENT_NAM
 active_environment_mode="$(read_state_value "${connection_file}" ENVIRONMENT_MODE)"
 active_environment_generation="$(
     read_state_value "${connection_file}" ENVIRONMENT_GENERATION
+)"
+active_vnc_geometry="$(
+    read_state_value "${connection_file}" VNC_GEOMETRY
 )"
 active_container_instance_name="$(
     read_state_value "${connection_file}" CONTAINER_INSTANCE_NAME
@@ -1029,12 +1219,13 @@ active_codex_app_server_process_id="$(
     read_state_value "${connection_file}" CODEX_APP_SERVER_PID
 )"
 [[ "${active_environment_name}" == "${environment_name}" &&
-   "${active_environment_mode}" == "${environment_mode}" ]] || {
+   "${active_environment_mode}" == "${environment_mode}" &&
+   "${active_vnc_geometry}" == "${vnc_geometry}" ]] || {
     printf 'VNC environment state does not match the request.\n' >&2
     exit 6
 }
 
-printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "${job_id}" "${vnc_node}" "${vnc_port}" "${remote_ssh_port}" \
     "${host_key_public_file}" "${actual_partition}" "${actual_cpu_count}" \
     "${actual_gpu_count}" "${actual_memory}" "${actual_time_limit}" \
@@ -1045,7 +1236,7 @@ printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' 
     "${active_opencodex_migration_status}" \
     "${active_codex_app_server_status}" \
     "${active_codex_app_server_process_id}" \
-    "${remote_ssh_target}" "${remote_sftp_status}"
+    "${remote_ssh_target}" "${remote_sftp_status}" "${active_vnc_geometry}"
 REMOTE_START
 )" || fail "remote VNC startup failed"
 
@@ -1058,15 +1249,18 @@ IFS='|' read -r \
     active_opencodex_status active_opencodex_process_id active_opencodex_port \
     active_opencodex_migration_status active_codex_app_server_status \
     active_codex_app_server_process_id active_remote_ssh_target \
-    active_remote_sftp_status <<< "${ready_record}"
+    active_remote_sftp_status active_vnc_geometry <<< "${ready_record}"
 [[ "${vnc_job_id}" =~ ^[0-9]+$ ]] || fail "invalid VNC Job ID: ${vnc_job_id}"
 [[ "${vnc_node}" =~ ^[A-Za-z0-9._-]+$ ]] || fail "invalid VNC node: ${vnc_node}"
 [[ "${remote_vnc_port}" =~ ^[0-9]+$ ]] || fail "invalid VNC port: ${remote_vnc_port}"
-[[ "${remote_ssh_port}" =~ ^[0-9]+$ ]] || fail "invalid SSH port: ${remote_ssh_port}"
+[[ "${remote_ssh_port}" == "${configured_remote_ssh_port}" ]] ||
+    fail "remote SSH port ${remote_ssh_port:-unset} does not match configured port ${configured_remote_ssh_port}"
 [[ "${active_environment_name}" == "${environment_name}" ]] ||
     fail "active environment name does not match: ${active_environment_name}"
 [[ "${active_environment_mode}" == "${environment_mode}" ]] ||
     fail "active environment mode does not match: ${active_environment_mode}"
+[[ "${active_vnc_geometry}" == "${vnc_geometry}" ]] ||
+    fail "active VNC geometry does not match: ${active_vnc_geometry}"
 if [[ "${active_environment_mode}" == "mutable" ]]; then
     [[ "${active_remote_ssh_target}" == "CONTAINER" ]] ||
         fail "mutable environment SSH target is not the container"
@@ -1089,9 +1283,9 @@ host_key_public_file="$1"
 [[ -r "${host_key_public_file}" ]] || exit 2
 awk 'NF >= 2 { print $1 " " $2; exit }' "${host_key_public_file}"
 REMOTE_HOST_KEY
-)" || fail "could not retrieve the VNC Job SSH host key"
+)" || fail "could not retrieve the persistent SSH host key"
 [[ "${server_host_key}" =~ ^ssh-[A-Za-z0-9@._+-]+\ [A-Za-z0-9+/=]+$ ]] ||
-    fail "the VNC Job SSH host key is invalid"
+    fail "the persistent SSH host key is invalid"
 
 mkdir -p "${HOME}/.ssh"
 chmod 700 "${HOME}/.ssh"
@@ -1100,7 +1294,7 @@ printf '%s %s\n' "${vnc_host_key_alias}" "${server_host_key}" \
     > "${known_hosts_temporary_file}"
 ssh-keygen -lf "${known_hosts_temporary_file}" >/dev/null || {
     unlink "${known_hosts_temporary_file}"
-    fail "could not validate the VNC Job SSH host key"
+    fail "could not validate the persistent SSH host key"
 }
 chmod 600 "${known_hosts_temporary_file}"
 mv "${known_hosts_temporary_file}" "${known_hosts_file}"
@@ -1186,11 +1380,7 @@ local_vnc_rfb_is_ready() {
 wait_for_local_vnc_rfb() {
     local requested_port="$1"
 
-    for _ in {1..30}; do
-        local_vnc_rfb_is_ready "${requested_port}" && return 0
-        sleep 1
-    done
-    return 1
+    local_vnc_rfb_is_ready "${requested_port}"
 }
 
 local_opencodex_http_is_ready() {
@@ -1268,6 +1458,7 @@ master_check_output="$(
 )"
 local_vnc_port=""
 ssh_master_process_id=""
+verify_new_vnc_forward=false
 
 if [[ "${master_check_output}" == *"Master running"* ]]; then
     ssh_master_process_id="$(
@@ -1288,15 +1479,13 @@ if [[ "${master_check_output}" == *"Master running"* ]]; then
         if [[ "${saved_job_id}" == "${vnc_job_id}" &&
               "${saved_remote_vnc_port}" == "${remote_vnc_port}" &&
               "${saved_local_vnc_port}" =~ ^[0-9]+$ ]] &&
-           listener_uses_ssh_master "${saved_local_vnc_port}" &&
-           local_vnc_rfb_is_ready "${saved_local_vnc_port}"; then
+           listener_uses_ssh_master "${saved_local_vnc_port}"; then
             local_vnc_port="${saved_local_vnc_port}"
         else
             for ((candidate_port = remote_vnc_port + 10000;
                   candidate_port <= remote_vnc_port + 10050;
                   candidate_port++)); do
-                if listener_uses_ssh_master "${candidate_port}" &&
-                   local_vnc_rfb_is_ready "${candidate_port}"; then
+                if listener_uses_ssh_master "${candidate_port}"; then
                     local_vnc_port="${candidate_port}"
                     break
                 fi
@@ -1397,6 +1586,7 @@ if [[ "${master_check_output}" != *"Master running"* ]]; then
     ssh_master_process_id="$(
         sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' <<< "${master_check_output}"
     )"
+    verify_new_vnc_forward=true
 fi
 
 [[ "${ssh_master_process_id}" =~ ^[0-9]+$ ]] ||
@@ -1411,13 +1601,16 @@ if [[ -z "${local_vnc_port}" ]]; then
         -O forward \
         -L "127.0.0.1:${local_vnc_port}:127.0.0.1:${remote_vnc_port}" \
         "${vnc_ssh_alias}" || fail "could not create the VNC tunnel"
+    verify_new_vnc_forward=true
 fi
 listener_uses_ssh_master "${local_vnc_port}" ||
     fail "SSH did not listen on local VNC port ${local_vnc_port}"
-wait_for_local_vnc_rfb "${local_vnc_port}" || {
-    tail -n 80 "${launch_agent_stderr}" >&2 2>/dev/null || true
-    fail "local VNC tunnel on port ${local_vnc_port} did not return an RFB banner"
-}
+if [[ "${verify_new_vnc_forward}" == "true" ]]; then
+    wait_for_local_vnc_rfb "${local_vnc_port}" || {
+        tail -n 80 "${launch_agent_stderr}" >&2 2>/dev/null || true
+        fail "local VNC tunnel on port ${local_vnc_port} did not return an RFB banner"
+    }
+fi
 
 if [[ "${active_environment_mode}" == "mutable" ]]; then
     opencodex_forward_specification="127.0.0.1:${local_opencodex_port}"
@@ -1591,6 +1784,7 @@ local_state_temporary_file="$(mktemp "${local_connection_state_file}.XXXXXX")"
     printf 'REMOTE_SFTP_STATUS=%s\n' "${active_remote_sftp_status}"
     printf 'REMOTE_VNC_PORT=%s\n' "${remote_vnc_port}"
     printf 'LOCAL_VNC_PORT=%s\n' "${local_vnc_port}"
+    printf 'VNC_GEOMETRY=%s\n' "${active_vnc_geometry}"
     printf 'LOCAL_OPENCODEX_PORT=%s\n' "${local_opencodex_port}"
     printf 'REMOTE_SHARED_ROOT=%s\n' "${REMOTE_SHARED_ROOT}"
     printf 'REMOTE_VNC_USER_DIRECTORY=%s\n' "${vnc_user_service_directory}"
@@ -1642,6 +1836,8 @@ else
     log_message "Compute shell: ssh ${vnc_ssh_alias}"
 fi
 log_message "VNC address: ${vnc_url}"
+log_message "VNC geometry: ${active_vnc_geometry}"
+log_message "Text clipboard: enabled; in Screen Sharing use Edit > Use Shared Clipboard."
 log_message \
     "VNC password file: ${vnc_user_service_directory}/state/vnc-password.txt"
 

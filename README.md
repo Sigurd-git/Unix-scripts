@@ -59,11 +59,16 @@ Create `user_password.txt` in the same directory:
 username
 password
 /scratch/username
+44123
 ```
 
 The third line is the remote tool root for `code`, `cursor`, `dropbear`, and
-the per-user VNC files. Prefer a directory owned by the account instead of
-another user's directory. Protect this local file and never commit it:
+the per-user VNC files. It may be blank to use
+`/scratch/snormanh_lab/shared`. The fourth line is the fixed compute-node SSH
+port used by `remote_vnc.sh` and must be in `44000-44999`. When it is missing or
+blank, the script derives the same port from the remote username and writes it
+to line 4. Prefer a root owned by the account instead of another user's
+directory. Protect this local file and never commit it:
 
 ```bash
 chmod 600 user_password.txt
@@ -206,6 +211,13 @@ the job and tunnel running without opening the viewer with:
 ./remote_vnc.sh --no-open
 ```
 
+The default framebuffer is `2560x1440`. Select another size when submitting a
+new job, for example:
+
+```bash
+./remote_vnc.sh --geometry 2880x1800 --restart
+```
+
 An existing managed VNC job is reused. Resource arguments only affect a new
 job. Use `--restart` when resource values must change or when the script finds
 an older VNC job:
@@ -220,6 +232,35 @@ During startup, the script reports stages such as `CHECKING_IMAGE`,
 the development environment and can take substantially longer than later
 launches. Existing valid generations are reused.
 
+#### macOS-style desktop and clipboard
+
+The VNC session installs a checksum-pinned WhiteSur light theme into the
+persistent container home, keeps the existing XFCE panel launchers, enlarges
+the lower launcher panel, moves the window controls to the left, and applies an
+included high-resolution background. If the theme download is unavailable,
+the session still starts with Greybird. The profile is applied once per profile
+version so later user customization is retained. Reapply it from a VNC terminal
+with:
+
+```bash
+remote-vnc-desktop-profile apply --force
+```
+
+The profile uses X11 Super for macOS-style window shortcuts; VNC clients
+normally map the Mac Command key to it. It adds Super+Space for the application
+finder, Super+Tab for window switching,
+Super+M for minimize, Super+Arrow for maximize or tiling, Super+Return for a
+terminal, and Command/Super+Shift+3 or 4 for screenshots. Application editing
+shortcuts continue to follow each Linux application's own bindings.
+
+TigerVNC uses RFB 3.8 with `VncAuth` and listens only on compute-node loopback.
+The script forwards it through the existing public-key SSH connection, which
+allows the built-in macOS Screen Sharing app to connect to the printed
+`vnc://127.0.0.1:PORT` address. In Screen Sharing, enable **Edit > Use Shared
+Clipboard** for bidirectional text copy and paste. File and image clipboard
+formats depend on the client and are not guaranteed by the standard VNC text
+clipboard protocol.
+
 #### Remote root and file layout
 
 The script reads `REMOTE_SHARED_ROOT` from the third line of
@@ -228,6 +269,16 @@ The script reads `REMOTE_SHARED_ROOT` from the third line of
 1. `-r PATH` or `--root PATH`
 2. The third line of `user_password.txt`
 3. `/scratch/snormanh_lab/shared`
+
+The third line may be empty as long as its newline is retained before line 4.
+Line 4 stores the fixed container SSH port. A newly allocated VNC job reuses
+that port, so clients no longer need a port update after every job restart. If
+several clients have separate copies of `user_password.txt`, keep the same
+fourth line on each client; missing values are derived consistently from the
+remote username. The external SSH server host key is generated once under the
+private remote user directory and reused by later Slurm jobs. Each client
+verifies and stores that key on its first launch; restarting a job on the same
+node no longer changes the SSH port or server identity.
 
 Override it for one run with:
 
@@ -242,6 +293,8 @@ ${REMOTE_SHARED_ROOT}/remote-vnc/
 ├── releases/<bundle_sha256>/
 │   ├── remote_vnc_job.sh
 │   ├── start_vnc.sh
+│   ├── configure_desktop.sh
+│   ├── bluehive-aurora.svg
 │   ├── start_opencodex.sh
 │   ├── build_vnc_image.sh
 │   ├── prepare_environment.sh
@@ -256,6 +309,9 @@ ${REMOTE_SHARED_ROOT}/remote-vnc/
     ├── state/
     │   ├── connection.env
     │   ├── vnc-password.txt
+    │   ├── remote-ssh/
+    │   │   ├── server-key
+    │   │   └── server-key.pub
     │   └── jobs/<slurm_job_id>/
     ├── logs/
     ├── images/
@@ -553,6 +609,7 @@ The Slurm launch scripts share these resource options:
 `remote_vnc.sh` also accepts:
 
 - `--env NAME`: select or create a persistent environment; default `default`
+- `--geometry WIDTHxHEIGHT`: set the VNC framebuffer; default `2560x1440`
 - `--immutable`: run the original read-only image without preparing a sandbox
 - `--restart`: replace the current VNC job
 - `--no-open`: do not open macOS Screen Sharing
@@ -564,9 +621,13 @@ Run any script with `--help` for its current defaults.
 
 - `user_password.txt` is ignored by Git and should use mode `0600`.
 - VNC listens on compute-node loopback and reaches the Mac through an SSH local forward.
+- TigerVNC keeps connection blacklisting enabled and requires `VncAuth`; its
+  send/receive text clipboard parameters are checked before a job is marked ready.
 - The mutable VNC job's external SSH service runs inside the read-only Apptainer rootfs, accepts only the configured public key, and enables SFTP.
 - Each user's VNC state directory uses mode `0700`; the VNC password file uses mode `0600`.
-- SSH host keys are checked before the Mac stores the VNC connection state.
+- The external SSH host key persists in each user's mode `0700` state directory;
+  its private file uses mode `0600`, and the key pair is checked before use.
+- The Mac checks the persistent SSH host key before storing the VNC connection state.
 - The script rejects a container SSH shell, host backchannel, OpenCodex proxy, or Codex app-server process outside the expected Slurm batch cgroup.
 - Shared and private SIF files are checked before execution.
 - Mutable environments and checkpoints remain under each user's mode `0700` directory.

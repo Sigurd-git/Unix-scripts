@@ -15,6 +15,7 @@ environment_home="${9:?environment home is required}"
 environment_name="${10:?environment name is required}"
 environment_mode="${11:?environment mode is required}"
 environment_generation="${12:?environment generation is required}"
+requested_remote_ssh_port="${13:?fixed remote SSH port is required}"
 current_user="$(id -un)"
 host_home="${HOME:?HOME is required}"
 container_home="/home/${current_user}"
@@ -31,6 +32,12 @@ container_home="/home/${current_user}"
 }
 [[ "${vnc_port}" =~ ^[0-9]+$ ]] || {
     printf 'Invalid VNC port: %s\n' "${vnc_port}" >&2
+    exit 2
+}
+[[ "${requested_remote_ssh_port}" =~ ^[0-9]+$ ]] &&
+    ((requested_remote_ssh_port >= 44000 && requested_remote_ssh_port <= 44999)) || {
+    printf 'Invalid fixed remote SSH port: %s\n' \
+        "${requested_remote_ssh_port}" >&2
     exit 2
 }
 if [[ -n "${opencodex_port}" ]]; then
@@ -76,6 +83,8 @@ remote_ssh_log_file="${remote_ssh_directory}/sshd.log"
 remote_ssh_lock_file="${remote_ssh_directory}/service.lock"
 host_shell_entry_script="${host_shell_directory}/entry.sh"
 host_shell_server_key="${host_shell_directory}/server-key"
+persistent_server_key="${state_directory}/remote-ssh/server-key"
+persistent_server_public_key="${persistent_server_key}.pub"
 environment_common_helpers="${release_directory}/environment_common.sh"
 container_host_proxy_source="${release_directory}/container_host_proxy.sh"
 container_ssh_host_directory="${environment_home}/.local/state/remote-vnc/ssh/${SLURM_JOB_ID}"
@@ -134,6 +143,23 @@ fi
         "${host_shell_directory}" >&2
     exit 2
 }
+persistent_server_key_public="$(
+    ssh-keygen -y -f "${persistent_server_key}" 2>/dev/null |
+        awk 'NF >= 2 { print $1 " " $2; exit }' || true
+)"
+recorded_persistent_server_key_public="$(
+    awk 'NF >= 2 { print $1 " " $2; exit }' \
+        "${persistent_server_public_key}" 2>/dev/null || true
+)"
+[[ -n "${persistent_server_key_public}" &&
+   "${persistent_server_key_public}" == \
+       "${recorded_persistent_server_key_public}" ]] &&
+    ssh-keygen -lf "${persistent_server_key}" >/dev/null 2>&1 &&
+    ssh-keygen -lf "${persistent_server_public_key}" >/dev/null 2>&1 || {
+    printf 'Persistent SSH host-key pair is invalid or mismatched under %s.\n' \
+        "${state_directory}/remote-ssh" >&2
+    exit 2
+}
 
 node_ipv4_address="$(
     getent ahostsv4 "${expected_node}" |
@@ -170,26 +196,6 @@ permit_open_targets="127.0.0.1:${vnc_port}"
 if [[ -n "${opencodex_port}" ]]; then
     permit_open_targets+=" 127.0.0.1:${opencodex_port}"
 fi
-
-choose_remote_ssh_port() {
-    local candidate_port
-    local first_candidate_port=$((44000 + SLURM_JOB_ID % 500))
-
-    for ((candidate_port = first_candidate_port; candidate_port <= 44999; candidate_port++)); do
-        if ! port_is_listening "${candidate_port}"; then
-            printf '%s\n' "${candidate_port}"
-            return 0
-        fi
-    done
-    for ((candidate_port = 44000; candidate_port < first_candidate_port; candidate_port++)); do
-        if ! port_is_listening "${candidate_port}"; then
-            printf '%s\n' "${candidate_port}"
-            return 0
-        fi
-    done
-
-    return 1
-}
 
 write_container_ssh_files() {
     local installed_proxy="${container_command_host_directory}/container-host-proxy"
@@ -365,7 +371,7 @@ write_connection_state() {
         printf 'ENVIRONMENT_MODE=%s\n' "${environment_mode}"
         printf 'ENVIRONMENT_GENERATION=%s\n' "${environment_generation}"
         printf 'ENVIRONMENT_ROOTFS=%s\n' "${runtime_image_path}"
-        printf 'HOST_KEY_PUBLIC_FILE=%s\n' "${host_shell_server_key}.pub"
+        printf 'HOST_KEY_PUBLIC_FILE=%s\n' "${persistent_server_public_key}"
         printf 'LOG=%s\n' "${remote_ssh_log_file}"
         printf 'CGROUP=%s\n' "${cgroup_path}"
         printf 'STARTED_AT=%s\n' "$(date --iso-8601=seconds)"
@@ -391,10 +397,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-remote_ssh_port="$(choose_remote_ssh_port)" || {
-    printf 'No free SSH port found in the range 44000-44999.\n' >&2
+remote_ssh_port="${requested_remote_ssh_port}"
+if port_is_listening "${remote_ssh_port}"; then
+    printf 'Configured remote SSH port %s is already in use on %s.\n' \
+        "${remote_ssh_port}" "${expected_node}" >&2
+    printf 'Choose another port from 44000 to 44999 on line 4 of user_password.txt, then restart.\n' \
+        >&2
     exit 4
-}
+fi
 write_connection_state "STARTING" "${remote_ssh_port}"
 
 sshd_arguments=(
@@ -402,7 +412,7 @@ sshd_arguments=(
     -o "Port=${remote_ssh_port}"
     -o ListenAddress=127.0.0.1
     -o "ListenAddress=${node_ipv4_address}"
-    -o "HostKey=${host_shell_server_key}"
+    -o "HostKey=${persistent_server_key}"
     -o "AuthorizedKeysFile=${authorized_keys_file}"
     -o "AllowUsers=${current_user}"
     -o "ForceCommand=${sshd_force_command}"

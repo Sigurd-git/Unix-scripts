@@ -13,8 +13,10 @@ image_build_timeout_seconds="${7:-1800}"
 environment_name="${8:-default}"
 environment_mode="${9:-mutable}"
 environment_build_timeout_seconds="${10:-10800}"
+requested_remote_ssh_port="${11:?fixed remote SSH port is required}"
+vnc_geometry="${12:-2560x1440}"
 
-launcher_version="9"
+launcher_version="12"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${job_id}"
@@ -61,6 +63,25 @@ bh_env_validate_name "${environment_name}" || {
 [[ "${environment_mode}" == "mutable" ||
    "${environment_mode}" == "immutable" ]] || {
     printf 'Invalid environment mode: %s\n' "${environment_mode}" >&2
+    exit 2
+}
+[[ "${requested_remote_ssh_port}" =~ ^[0-9]+$ ]] &&
+    ((requested_remote_ssh_port >= 44000 && requested_remote_ssh_port <= 44999)) || {
+    printf 'Invalid fixed remote SSH port: %s\n' \
+        "${requested_remote_ssh_port}" >&2
+    exit 2
+}
+if [[ "${vnc_geometry}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    vnc_width="${BASH_REMATCH[1]}"
+    vnc_height="${BASH_REMATCH[2]}"
+else
+    printf 'Invalid VNC geometry: %s\n' "${vnc_geometry}" >&2
+    exit 2
+fi
+((vnc_width >= 1024 && vnc_width <= 7680 &&
+  vnc_height >= 768 && vnc_height <= 4320)) || {
+    printf 'VNC geometry must be between 1024x768 and 7680x4320: %s\n' \
+        "${vnc_geometry}" >&2
     exit 2
 }
 
@@ -125,6 +146,8 @@ write_launcher_state() {
         printf 'ENVIRONMENT_MODE=%s\n' "${environment_mode}"
         printf 'ENVIRONMENT_GENERATION=%s\n' "${environment_generation}"
         printf 'ENVIRONMENT_ROOTFS=%s\n' "${runtime_image_path}"
+        printf 'REMOTE_SSH_PORT=%s\n' "${requested_remote_ssh_port}"
+        printf 'VNC_GEOMETRY=%s\n' "${vnc_geometry}"
         printf 'VNC_LAUNCHER_PID=%s\n' "${vnc_launcher_process_id}"
         printf 'SSH_LAUNCHER_PID=%s\n' "${remote_ssh_launcher_process_id}"
         printf 'CGROUP='
@@ -165,6 +188,8 @@ trap cleanup EXIT INT TERM
 
 for required_file in \
     "${start_vnc_script}" \
+    "${release_directory}/configure_desktop.sh" \
+    "${release_directory}/bluehive-aurora.svg" \
     "${release_directory}/start_opencodex.sh" \
     "${build_vnc_image_script}" \
     "${prepare_environment_script}" \
@@ -180,6 +205,7 @@ for required_file in \
 done
 for required_executable in \
     "${start_vnc_script}" "${build_vnc_image_script}" \
+    "${release_directory}/configure_desktop.sh" \
     "${release_directory}/start_opencodex.sh" \
     "${prepare_environment_script}" "${environment_common_helpers}" \
     "${remote_sshd_helper}"; do
@@ -263,7 +289,8 @@ write_launcher_state "STARTING_VNC"
     "${environment_name}" \
     "${environment_mode}" \
     "${environment_home}" \
-    "${environment_generation}" &
+    "${environment_generation}" \
+    "${vnc_geometry}" &
 vnc_launcher_process_id=$!
 write_launcher_state "STARTING_VNC"
 
@@ -286,7 +313,11 @@ for ((attempt_number = 1;
     if [[ "$(read_state_value "${vnc_connection_file}" STATUS || true)" == "READY" ]] &&
        [[ "$(read_state_value "${vnc_connection_file}" JOB_ID || true)" == "${job_id}" ]] &&
        [[ "$(read_state_value "${vnc_connection_file}" NODE || true)" == "$(hostname -s)" ]] &&
-       [[ "$(read_state_value "${vnc_connection_file}" VNC_PORT || true)" =~ ^[0-9]+$ ]]; then
+       [[ "$(read_state_value "${vnc_connection_file}" VNC_PORT || true)" =~ ^[0-9]+$ ]] &&
+       [[ "$(read_state_value "${vnc_connection_file}" VNC_GEOMETRY || true)" == \
+          "${vnc_geometry}" ]] &&
+       [[ "$(read_state_value "${vnc_connection_file}" VNC_CLIPBOARD || true)" == \
+          "ENABLED" ]]; then
         vnc_ready=true
         break
     fi
@@ -325,7 +356,7 @@ write_launcher_state "STARTING_SSH"
     "${authorized_keys_file}" "${opencodex_port}" \
     "${release_directory}" "${runtime_image_path}" "${environment_home}" \
     "${environment_name}" "${environment_mode}" \
-    "${environment_generation}" &
+    "${environment_generation}" "${requested_remote_ssh_port}" &
 remote_ssh_launcher_process_id=$!
 write_launcher_state "STARTING_SSH"
 
@@ -351,7 +382,8 @@ for ((attempt_number = 1; attempt_number <= 60; attempt_number++)); do
        [[ "$(read_state_value "${remote_ssh_connection_file}" SSH_TARGET || true)" == "${expected_ssh_target}" ]] &&
        [[ "$(read_state_value "${remote_ssh_connection_file}" ENVIRONMENT_NAME || true)" == "${environment_name}" ]] &&
        [[ "$(read_state_value "${remote_ssh_connection_file}" ENVIRONMENT_GENERATION || true)" == "${environment_generation}" ]] &&
-       [[ "$(read_state_value "${remote_ssh_connection_file}" SSH_PORT || true)" =~ ^[0-9]+$ ]]; then
+       [[ "$(read_state_value "${remote_ssh_connection_file}" SSH_PORT || true)" == \
+          "${requested_remote_ssh_port}" ]]; then
         remote_ssh_ready=true
         break
     fi
@@ -363,8 +395,9 @@ done
 }
 
 write_launcher_state "READY"
-printf 'REMOTE_VNC_JOB_READY job=%s node=%s vnc_port=%s opencodex_port=%s ssh_port=%s ssh_target=%s\n' \
+printf 'REMOTE_VNC_JOB_READY job=%s node=%s vnc_port=%s geometry=%s opencodex_port=%s ssh_port=%s ssh_target=%s\n' \
     "${job_id}" "${vnc_node}" "${vnc_port}" \
+    "${vnc_geometry}" \
     "${opencodex_port:-disabled}" \
     "$(read_state_value "${remote_ssh_connection_file}" SSH_PORT)" \
     "${expected_ssh_target}"

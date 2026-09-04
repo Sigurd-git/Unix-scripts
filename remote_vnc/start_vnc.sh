@@ -10,6 +10,7 @@ environment_name="${4:-default}"
 environment_mode="${5:-immutable}"
 requested_session_home="${6:-}"
 environment_generation="${7:-base-image}"
+vnc_geometry="${8:-2560x1440}"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 current_user="$(id -un)"
 host_home="${HOME:?HOME is required}"
@@ -54,10 +55,20 @@ container_instance_process_id=""
 opencodex_startup_timeout_seconds=120
 slurm_binary_directory=""
 host_path_prefix=""
+desktop_profile_source="${release_directory}/configure_desktop.sh"
+desktop_wallpaper_source="${release_directory}/bluehive-aurora.svg"
+desktop_profile_launcher="${session_home}/.local/bin/remote-vnc-desktop-profile"
+container_desktop_profile_launcher="${container_home}/.local/bin/remote-vnc-desktop-profile"
+desktop_wallpaper_directory="${session_home}/.local/share/backgrounds"
+desktop_wallpaper_file="${desktop_wallpaper_directory}/bluehive-aurora.svg"
+desktop_profile_autostart_file="${session_home}/.config/autostart/00-remote-vnc-desktop-profile.desktop"
+desktop_profile_state_file="${session_home}/.cache/remote-vnc/desktop-profile.env"
+desktop_profile_status="NOT_STARTED"
 
 for required_file in \
     "${image_path}" "${matlab_vnc_launcher}" "${environment_common_helpers}" \
-    "${opencodex_service_launcher}"; do
+    "${opencodex_service_launcher}" "${desktop_profile_source}" \
+    "${desktop_wallpaper_source}"; do
     [[ -r "${required_file}" ]] || {
         printf 'Required VNC file is missing: %s\n' "${required_file}" >&2
         exit 2
@@ -65,7 +76,7 @@ for required_file in \
 done
 for required_executable in \
     "${matlab_vnc_launcher}" "${environment_common_helpers}" \
-    "${opencodex_service_launcher}"; do
+    "${opencodex_service_launcher}" "${desktop_profile_source}"; do
     [[ -x "${required_executable}" ]] || {
         printf 'Required VNC helper is not executable: %s\n' \
             "${required_executable}" >&2
@@ -81,6 +92,19 @@ bh_env_validate_name "${environment_name}" || {
 [[ "${environment_mode}" == "mutable" ||
    "${environment_mode}" == "immutable" ]] || {
     printf 'Invalid environment mode: %s\n' "${environment_mode}" >&2
+    exit 2
+}
+if [[ "${vnc_geometry}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    vnc_width="${BASH_REMATCH[1]}"
+    vnc_height="${BASH_REMATCH[2]}"
+else
+    printf 'Invalid VNC geometry: %s\n' "${vnc_geometry}" >&2
+    exit 2
+fi
+((vnc_width >= 1024 && vnc_width <= 7680 &&
+  vnc_height >= 768 && vnc_height <= 4320)) || {
+    printf 'VNC geometry must be between 1024x768 and 7680x4320: %s\n' \
+        "${vnc_geometry}" >&2
     exit 2
 }
 slurm_sbatch_executable="$(bh_env_find_slurm_executable sbatch)" || {
@@ -232,6 +256,7 @@ mkdir -p \
     "${xfce_terminal_config_directory}" \
     "${session_home}/.local/bin" \
     "${session_home}/.local/share/applications" \
+    "${desktop_wallpaper_directory}" \
     "${session_home}/.local/share/xfce4/helpers" \
     "${session_home}/.ssh" \
     "${session_home}/Desktop" \
@@ -243,6 +268,7 @@ chmod 700 "${state_directory}" "${job_state_directory}" "${host_shell_directory}
     "${xfce_terminal_config_directory}" \
     "${session_home}/.local" "${session_home}/.local/bin" \
     "${session_home}/.local/share" "${session_home}/.local/share/applications" \
+    "${desktop_wallpaper_directory}" \
     "${session_home}/.local/share/xfce4" "${session_home}/.local/share/xfce4/helpers" \
     "${session_home}/.ssh" "${session_home}/Desktop" \
     "${runtime_directory}" "${runtime_directory}/runtime"
@@ -277,6 +303,29 @@ container_environment_shell_launcher="${container_home}/.local/bin/bh-env-shell-
 environment_admin_launcher="${session_home}/.local/bin/bh-env-admin-terminal"
 environment_matlab_launcher="${session_home}/.local/bin/bh-env-matlab"
 container_environment_matlab_launcher="${container_home}/.local/bin/bh-env-matlab"
+
+desktop_profile_temporary_file="${desktop_profile_launcher}.tmp.$$"
+cp "${desktop_profile_source}" "${desktop_profile_temporary_file}"
+chmod 700 "${desktop_profile_temporary_file}"
+mv "${desktop_profile_temporary_file}" "${desktop_profile_launcher}"
+desktop_wallpaper_temporary_file="${desktop_wallpaper_file}.tmp.$$"
+cp "${desktop_wallpaper_source}" "${desktop_wallpaper_temporary_file}"
+chmod 600 "${desktop_wallpaper_temporary_file}"
+mv "${desktop_wallpaper_temporary_file}" "${desktop_wallpaper_file}"
+{
+    printf '[Desktop Entry]\n'
+    printf 'Version=1.0\n'
+    printf 'Type=Application\n'
+    printf 'Name=Remote VNC Desktop Profile\n'
+    printf 'Comment=Apply the persistent macOS-inspired XFCE profile\n'
+    printf 'Exec=%s apply\n' "${container_desktop_profile_launcher}"
+    printf 'OnlyShowIn=XFCE;\n'
+    printf 'NoDisplay=true\n'
+    printf 'X-GNOME-Autostart-enabled=true\n'
+} > "${desktop_profile_autostart_file}"
+chmod 600 "${desktop_profile_autostart_file}"
+rm -f "${desktop_profile_state_file}"
+
 if [[ "${environment_mode}" == "mutable" ]]; then
     matlab_vnc_target="${environment_name}"
 else
@@ -331,6 +380,12 @@ container_options+=(
     --env "XAUTHORITY=${container_home}/.Xauthority"
 )
 
+if ! "${apptainer_executable}" "${container_options[@]}" "${image_path}" \
+    "${container_desktop_profile_launcher}" prepare; then
+    printf 'WhiteSur theme preparation failed; continuing with the XFCE fallback theme.\n' \
+        >&2
+fi
+
 matlab_warmup_available=false
 matlab_warmup_command=(ionice -c 3 nice -n 10)
 if [[ "${environment_mode}" == "mutable" ]] &&
@@ -383,7 +438,7 @@ fi
 chmod 600 "${vnc_password_file}"
 
 {
-    printf 'geometry=1920x1080\n'
+    printf 'geometry=%s\n' "${vnc_geometry}"
     printf 'depth=24\n'
     printf 'rfbport=%s\n' "${vnc_port}"
     printf 'interface=127.0.0.1\n'
@@ -391,6 +446,13 @@ chmod 600 "${vnc_password_file}"
     printf 'session=xfce\n'
     printf 'localhost\n'
     printf 'alwaysshared\n'
+    printf 'acceptcuttext=1\n'
+    printf 'sendcuttext=1\n'
+    printf 'sendprimary=1\n'
+    printf 'setprimary=1\n'
+    printf 'maxcuttext=1048576\n'
+    printf 'acceptsetdesktopsize=1\n'
+    printf 'useblacklist=1\n'
 } > "${vnc_config_file}"
 chmod 600 "${vnc_config_file}"
 
@@ -776,6 +838,80 @@ if grep -Evq '^(127\.0\.0\.1|\[::1\]):' <<< "${listener_addresses}"; then
     exit 6
 fi
 
+read_vnc_parameter() {
+    local parameter_name="$1"
+
+    "${apptainer_executable}" "${container_options[@]}" "${image_path}" \
+        /usr/bin/vncconfig -display "${display_value}" \
+        -get "${parameter_name}" 2>/dev/null |
+        awk '
+            NF {
+                parameter_value = $0
+                sub(/^[^=:]*[=:][[:space:]]*/, "", parameter_value)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", parameter_value)
+                parameter_value = tolower(parameter_value)
+                if (parameter_value == "on" || parameter_value == "true" ||
+                    parameter_value == "yes") {
+                    parameter_value = "1"
+                } else if (parameter_value == "off" ||
+                           parameter_value == "false" ||
+                           parameter_value == "no") {
+                    parameter_value = "0"
+                }
+                print parameter_value
+                exit
+            }
+        '
+}
+
+for vnc_parameter_expectation in \
+    AcceptCutText=1 \
+    SendCutText=1 \
+    SendPrimary=1 \
+    SetPrimary=1 \
+    MaxCutText=1048576 \
+    AcceptSetDesktopSize=1 \
+    UseBlacklist=1; do
+    vnc_parameter_name="${vnc_parameter_expectation%%=*}"
+    expected_vnc_parameter_value="${vnc_parameter_expectation#*=}"
+    actual_vnc_parameter_value="$(
+        read_vnc_parameter "${vnc_parameter_name}" || true
+    )"
+    [[ "${actual_vnc_parameter_value}" == \
+       "${expected_vnc_parameter_value}" ]] || {
+        printf 'VNC parameter %s is %s; expected %s.\n' \
+            "${vnc_parameter_name}" \
+            "${actual_vnc_parameter_value:-unavailable}" \
+            "${expected_vnc_parameter_value}" >&2
+        exit 6
+    }
+done
+
+for ((attempt_number = 1; attempt_number <= 45; attempt_number++)); do
+    desktop_profile_status="$(
+        read_state_value "${desktop_profile_state_file}" STATUS || true
+    )"
+    desktop_profile_job_id="$(
+        read_state_value "${desktop_profile_state_file}" JOB_ID || true
+    )"
+    if [[ "${desktop_profile_job_id}" == "${job_id}" ]] &&
+       [[ "${desktop_profile_status}" == "READY" ||
+          "${desktop_profile_status}" == "READY_REUSED" ]]; then
+        break
+    fi
+    if [[ "${desktop_profile_job_id}" == "${job_id}" &&
+          "${desktop_profile_status}" == FAILED_* ]]; then
+        break
+    fi
+    sleep 1
+done
+if [[ "${desktop_profile_job_id:-}" != "${job_id}" ]] ||
+   [[ "${desktop_profile_status}" != "READY" &&
+      "${desktop_profile_status}" != "READY_REUSED" ]]; then
+    printf 'Desktop profile did not report ready for Job %s (status=%s).\n' \
+        "${job_id}" "${desktop_profile_status:-unavailable}" >&2
+fi
+
 if [[ "${environment_mode}" == "mutable" ]]; then
     write_status "STARTING_OPENCODEX"
     mkdir -p "${opencodex_service_directory}"
@@ -871,8 +1007,13 @@ connection_temporary_file="${connection_file}.tmp.${job_id}"
     printf 'NODE=%s\n' "$(hostname -s)"
     printf 'DISPLAY=%s\n' "${display_value}"
     printf 'VNC_PORT=%s\n' "${vnc_port}"
+    printf 'VNC_GEOMETRY=%s\n' "${vnc_geometry}"
+    printf 'VNC_CLIPBOARD=ENABLED\n'
+    printf 'VNC_SCREEN_SHARING_COMPATIBILITY=RFB_3_8_VNC_AUTH\n'
     printf 'VNC_PASSWORD_FILE=%s\n' "${plain_password_file}"
     printf 'VNC_LOG=%s\n' "${vnc_log_file}"
+    printf 'DESKTOP_PROFILE_STATUS=%s\n' "${desktop_profile_status}"
+    printf 'DESKTOP_PROFILE_STATE=%s\n' "${desktop_profile_state_file}"
     printf 'HOST_SHELL_PORT=%s\n' "${host_shell_port}"
     printf 'HOST_SHELL_LOG=%s\n' "${host_shell_log_file}"
     printf 'HOST_SHELL_CLIENT_KEY=%s\n' "${host_shell_client_key}"
@@ -911,8 +1052,9 @@ mv "${connection_temporary_file}" "${connection_file}"
 write_status "READY"
 printf 'READY\n' > "${job_state_directory}/READY"
 
-printf 'VNC_READY job=%s node=%s display=%s port=%s\n' \
-    "${job_id}" "$(hostname -s)" "${display_value}" "${vnc_port}"
+printf 'VNC_READY job=%s node=%s display=%s port=%s geometry=%s desktop=%s\n' \
+    "${job_id}" "$(hostname -s)" "${display_value}" "${vnc_port}" \
+    "${vnc_geometry}" "${desktop_profile_status}"
 printf 'Password file: %s\n' "${plain_password_file}"
 printf 'VNC log: %s\n' "${vnc_log_file}"
 printf 'Host-shell port: %s\n' "${host_shell_port}"
