@@ -56,18 +56,22 @@ opencodex_startup_timeout_seconds=120
 slurm_binary_directory=""
 host_path_prefix=""
 desktop_profile_source="${release_directory}/configure_desktop.sh"
+macos_shortcut_source="${release_directory}/macos_shortcut.sh"
 desktop_wallpaper_source="${release_directory}/bluehive-aurora.svg"
 desktop_profile_launcher="${session_home}/.local/bin/remote-vnc-desktop-profile"
 container_desktop_profile_launcher="${container_home}/.local/bin/remote-vnc-desktop-profile"
+macos_shortcut_launcher="${session_home}/.local/bin/remote-vnc-macos-shortcut"
 desktop_wallpaper_directory="${session_home}/.local/share/backgrounds"
 desktop_wallpaper_file="${desktop_wallpaper_directory}/bluehive-aurora.svg"
 desktop_profile_autostart_file="${session_home}/.config/autostart/00-remote-vnc-desktop-profile.desktop"
 desktop_profile_state_file="${session_home}/.cache/remote-vnc/desktop-profile.env"
 desktop_profile_status="NOT_STARTED"
+macos_shortcuts_status="NOT_STARTED"
 
 for required_file in \
     "${image_path}" "${matlab_vnc_launcher}" "${environment_common_helpers}" \
     "${opencodex_service_launcher}" "${desktop_profile_source}" \
+    "${macos_shortcut_source}" \
     "${desktop_wallpaper_source}"; do
     [[ -r "${required_file}" ]] || {
         printf 'Required VNC file is missing: %s\n' "${required_file}" >&2
@@ -76,7 +80,8 @@ for required_file in \
 done
 for required_executable in \
     "${matlab_vnc_launcher}" "${environment_common_helpers}" \
-    "${opencodex_service_launcher}" "${desktop_profile_source}"; do
+    "${opencodex_service_launcher}" "${desktop_profile_source}" \
+    "${macos_shortcut_source}"; do
     [[ -x "${required_executable}" ]] || {
         printf 'Required VNC helper is not executable: %s\n' \
             "${required_executable}" >&2
@@ -308,6 +313,10 @@ desktop_profile_temporary_file="${desktop_profile_launcher}.tmp.$$"
 cp "${desktop_profile_source}" "${desktop_profile_temporary_file}"
 chmod 700 "${desktop_profile_temporary_file}"
 mv "${desktop_profile_temporary_file}" "${desktop_profile_launcher}"
+macos_shortcut_temporary_file="${macos_shortcut_launcher}.tmp.$$"
+cp "${macos_shortcut_source}" "${macos_shortcut_temporary_file}"
+chmod 700 "${macos_shortcut_temporary_file}"
+mv "${macos_shortcut_temporary_file}" "${macos_shortcut_launcher}"
 desktop_wallpaper_temporary_file="${desktop_wallpaper_file}.tmp.$$"
 cp "${desktop_wallpaper_source}" "${desktop_wallpaper_temporary_file}"
 chmod 600 "${desktop_wallpaper_temporary_file}"
@@ -894,6 +903,10 @@ for ((attempt_number = 1; attempt_number <= 45; attempt_number++)); do
     desktop_profile_job_id="$(
         read_state_value "${desktop_profile_state_file}" JOB_ID || true
     )"
+    macos_shortcuts_status="$(
+        read_state_value "${desktop_profile_state_file}" \
+            MACOS_SHORTCUTS || true
+    )"
     if [[ "${desktop_profile_job_id}" == "${job_id}" ]] &&
        [[ "${desktop_profile_status}" == "READY" ||
           "${desktop_profile_status}" == "READY_REUSED" ]]; then
@@ -1013,6 +1026,7 @@ connection_temporary_file="${connection_file}.tmp.${job_id}"
     printf 'VNC_PASSWORD_FILE=%s\n' "${plain_password_file}"
     printf 'VNC_LOG=%s\n' "${vnc_log_file}"
     printf 'DESKTOP_PROFILE_STATUS=%s\n' "${desktop_profile_status}"
+    printf 'MACOS_SHORTCUTS_STATUS=%s\n' "${macos_shortcuts_status:-UNAVAILABLE}"
     printf 'DESKTOP_PROFILE_STATE=%s\n' "${desktop_profile_state_file}"
     printf 'HOST_SHELL_PORT=%s\n' "${host_shell_port}"
     printf 'HOST_SHELL_LOG=%s\n' "${host_shell_log_file}"
@@ -1052,9 +1066,10 @@ mv "${connection_temporary_file}" "${connection_file}"
 write_status "READY"
 printf 'READY\n' > "${job_state_directory}/READY"
 
-printf 'VNC_READY job=%s node=%s display=%s port=%s geometry=%s desktop=%s\n' \
+printf 'VNC_READY job=%s node=%s display=%s port=%s geometry=%s desktop=%s shortcuts=%s\n' \
     "${job_id}" "$(hostname -s)" "${display_value}" "${vnc_port}" \
-    "${vnc_geometry}" "${desktop_profile_status}"
+    "${vnc_geometry}" "${desktop_profile_status}" \
+    "${macos_shortcuts_status:-UNAVAILABLE}"
 printf 'Password file: %s\n' "${plain_password_file}"
 printf 'VNC log: %s\n' "${vnc_log_file}"
 printf 'Host-shell port: %s\n' "${host_shell_port}"

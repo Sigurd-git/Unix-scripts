@@ -5,7 +5,7 @@ umask 077
 
 action="${1:-}"
 force_apply="${2:-}"
-profile_version="20260904.1"
+profile_version="20260904.2"
 theme_commit="e39f6341fdcdf02826d3daab68faf4204669edf3"
 theme_archive_sha256="50ca872c44d28acfa9d43aa337981520ccc19b807dfc6b5293c7d8d9fe0f3a93"
 theme_archive_name="WhiteSur-Light-solid-${theme_commit}.tar.xz"
@@ -19,6 +19,8 @@ theme_archive="${theme_cache_directory}/${theme_archive_name}"
 profile_state_file="${cache_directory}/desktop-profile.env"
 profile_marker_file="${cache_directory}/desktop-profile-version"
 profile_log_file="${cache_directory}/desktop-profile.log"
+macos_shortcut_launcher="${HOME}/.local/bin/remote-vnc-macos-shortcut"
+macos_shortcuts_status="UNAVAILABLE"
 wallpaper_file="${XDG_DATA_HOME:-${HOME}/.local/share}/backgrounds/bluehive-aurora.svg"
 temporary_directory=""
 
@@ -38,6 +40,7 @@ write_profile_state() {
         printf 'STATUS=%s\n' "${status_value}"
         printf 'PROFILE_VERSION=%s\n' "${profile_version}"
         printf 'THEME=%s\n' "${active_theme}"
+        printf 'MACOS_SHORTCUTS=%s\n' "${macos_shortcuts_status}"
         printf 'DISPLAY=%s\n' "${DISPLAY:-}"
         printf 'JOB_ID=%s\n' "${SLURM_JOB_ID:-}"
         printf 'UPDATED_AT=%s\n' "$(date --iso-8601=seconds 2>/dev/null || date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -168,6 +171,14 @@ set_existing_property() {
         -s "${property_value}" >/dev/null
 }
 
+remove_property() {
+    local channel_name="$1"
+    local property_name="$2"
+
+    property_exists "${channel_name}" "${property_name}" || return 0
+    xfconf-query -c "${channel_name}" -p "${property_name}" -r >/dev/null
+}
+
 configure_wallpaper() {
     local found_image_property=false
     local image_property
@@ -218,6 +229,72 @@ configure_application_shortcuts() {
         '/commands/custom/<Shift><Super>4' string 'xfce4-screenshooter -r'
 }
 
+configure_macos_application_shortcuts() {
+    local shortcut_name
+
+    if [[ ! -x "${macos_shortcut_launcher}" ]] ||
+       ! command -v xdotool >/dev/null 2>&1; then
+        for shortcut_name in \
+            '<Super>a' '<Super>c' '<Super>f' '<Super>l' '<Super>n' \
+            '<Super>o' '<Super>p' '<Super>r' '<Super>s' '<Super>t' \
+            '<Super>v' '<Super>w' '<Super>x' '<Super>z' \
+            '<Shift><Super>z'; do
+            remove_property xfce4-keyboard-shortcuts \
+                "/commands/custom/${shortcut_name}"
+        done
+        macos_shortcuts_status="UNAVAILABLE"
+        log_message "macOS application shortcuts need xdotool and ${macos_shortcut_launcher}."
+        return 0
+    fi
+
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>a' string \
+        "${macos_shortcut_launcher} select-all"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>c' string \
+        "${macos_shortcut_launcher} copy"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>f' string \
+        "${macos_shortcut_launcher} find"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>l' string \
+        "${macos_shortcut_launcher} location"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>n' string \
+        "${macos_shortcut_launcher} new-window"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>o' string \
+        "${macos_shortcut_launcher} open"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>p' string \
+        "${macos_shortcut_launcher} print"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>r' string \
+        "${macos_shortcut_launcher} reload"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>s' string \
+        "${macos_shortcut_launcher} save"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>t' string \
+        "${macos_shortcut_launcher} new-tab"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>v' string \
+        "${macos_shortcut_launcher} paste"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>w' string \
+        "${macos_shortcut_launcher} close"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>x' string \
+        "${macos_shortcut_launcher} cut"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Super>z' string \
+        "${macos_shortcut_launcher} undo"
+    set_property xfce4-keyboard-shortcuts \
+        '/commands/custom/<Shift><Super>z' string \
+        "${macos_shortcut_launcher} redo"
+    macos_shortcuts_status="READY"
+}
+
 configure_window_shortcuts() {
     set_property xfce4-keyboard-shortcuts \
         '/xfwm4/custom/<Super>Tab' string switch_window_key
@@ -245,7 +322,11 @@ apply_profile() {
         active_theme="${theme_name}"
         active_window_theme="${theme_name}"
     fi
-    expected_marker="${profile_version}:${active_theme}:${active_window_theme}"
+    if [[ -x "${macos_shortcut_launcher}" ]] &&
+       command -v xdotool >/dev/null 2>&1; then
+        macos_shortcuts_status="READY"
+    fi
+    expected_marker="${profile_version}:${active_theme}:${active_window_theme}:${macos_shortcuts_status}"
     if [[ -s "${profile_marker_file}" ]]; then
         existing_marker="$(head -n 1 "${profile_marker_file}")"
     fi
@@ -295,6 +376,7 @@ apply_profile() {
 
     configure_wallpaper
     configure_application_shortcuts
+    configure_macos_application_shortcuts
     configure_window_shortcuts
 
     printf '%s\n' "${expected_marker}" > "${profile_marker_file}"

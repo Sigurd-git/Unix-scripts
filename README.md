@@ -166,7 +166,7 @@ For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.
 # Keep the original read-only VNC image
 ./remote_vnc.sh --immutable --restart
 
-# Reuse the running VNC job without opening Screen Sharing
+# Reuse the running VNC job without opening a viewer
 ./remote_vnc.sh --no-open
 ```
 
@@ -204,8 +204,9 @@ Start with the defaults (16 CPUs, 1 GPU, 256 GiB, 24 hours):
 ./remote_vnc.sh
 ```
 
-The script opens macOS Screen Sharing after the SSH and VNC checks pass. Keep
-the job and tunnel running without opening the viewer with:
+After the SSH and VNC checks pass, the script opens TigerVNC when it is
+installed under `/Applications`; otherwise it uses macOS Screen Sharing. Keep
+the job and tunnel running without opening a viewer with:
 
 ```bash
 ./remote_vnc.sh --no-open
@@ -246,20 +247,31 @@ with:
 remote-vnc-desktop-profile apply --force
 ```
 
-The profile uses X11 Super for macOS-style window shortcuts; VNC clients
-normally map the Mac Command key to it. It adds Super+Space for the application
-finder, Super+Tab for window switching,
-Super+M for minimize, Super+Arrow for maximize or tiling, Super+Return for a
-terminal, and Command/Super+Shift+3 or 4 for screenshots. Application editing
-shortcuts continue to follow each Linux application's own bindings.
+TigerVNC maps the Mac Command key to X11 Super. The desktop profile adds an
+application-aware bridge for the common macOS shortcuts. In Chrome, ChatGPT,
+MATLAB, Thunar, and other GUI applications, Command+C/V/A/X/Z/Shift+Z/F/S/O/N/T/W/R/L/P
+invoke the corresponding Linux Control shortcut. In XFCE Terminal,
+Command+C/V/A/F/N/T/W instead invoke Control+Shift+C/V/A/F/N/T/W. Actions such
+as Command+Z and Command+S stay inactive in terminals so they cannot suspend a
+foreground process or enable terminal flow control.
+
+The existing desktop shortcuts remain available: Command+Space opens the
+application finder, Command+Tab switches windows, Command+M minimizes,
+Command+Arrow maximizes or tiles, Command+Return opens a terminal, and
+Command+Shift+3 or 4 takes screenshots. macOS reserves some system shortcuts,
+including Command+Tab and Command+Space. In TigerVNC, press
+Control+Option+G once to capture them; the window title will include
+`keyboard grabbed`. Press Control+Option by itself to return those shortcuts to
+macOS. The first capture may require enabling TigerVNC in **System Settings →
+Privacy & Security → Accessibility**.
 
 TigerVNC uses RFB 3.8 with `VncAuth` and listens only on compute-node loopback.
-The script forwards it through the existing public-key SSH connection, which
-allows the built-in macOS Screen Sharing app to connect to the printed
-`vnc://127.0.0.1:PORT` address. In Screen Sharing, enable **Edit > Use Shared
-Clipboard** for bidirectional text copy and paste. File and image clipboard
-formats depend on the client and are not guaranteed by the standard VNC text
-clipboard protocol.
+The script forwards it through the existing public-key SSH connection.
+TigerVNC is the recommended Mac client because its text clipboard works with
+this Linux server and it forwards Command as Super. The launcher enables both
+clipboard directions, keeps the requested remote geometry instead of resizing
+it to the viewer window, and never reads the saved VNC password. File and image
+clipboard formats are outside the standard VNC text clipboard protocol.
 
 #### Remote root and file layout
 
@@ -612,7 +624,7 @@ The Slurm launch scripts share these resource options:
 - `--geometry WIDTHxHEIGHT`: set the VNC framebuffer; default `2560x1440`
 - `--immutable`: run the original read-only image without preparing a sandbox
 - `--restart`: replace the current VNC job
-- `--no-open`: do not open macOS Screen Sharing
+- `--no-open`: do not open a VNC viewer
 
 `tunnel.sh` also accepts `--tool code|cursor` and `-n` to disable logging.
 Run any script with `--help` for its current defaults.

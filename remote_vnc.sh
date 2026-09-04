@@ -38,7 +38,7 @@ Usage: remote_vnc.sh [options]
 Start or reuse an independent VNC Slurm job. A mutable job starts OpenCodex,
 Codex app-server, and a public-key-only SSH service inside its persistent
 Apptainer environment. The script updates the existing Mac SSH entry "blhc3",
-creates the VNC tunnel, and opens macOS Screen Sharing. Direct SSH opens Fish
+creates the VNC tunnel, and opens TigerVNC when installed. Direct SSH opens Fish
 inside the container; bluehive-host-shell returns to the allocated host.
 
 The resource options match remote_sshd.sh. They apply when a new VNC job is
@@ -58,7 +58,7 @@ Options:
   --geometry WIDTHxHEIGHT    VNC framebuffer size (default: 2560x1440)
   --immutable                Run the original read-only VNC image
   --restart     Replace the current VNC job with a newly managed job
-  --no-open     Prepare SSH and VNC without opening Screen Sharing
+  --no-open     Prepare SSH and VNC without opening a VNC viewer
   -h, --help    Show this help
 
 After startup:
@@ -643,6 +643,7 @@ connection_file="${user_service_directory}/state/connection.env"
 for required_file in \
     "${release_directory}/start_vnc.sh" \
     "${release_directory}/configure_desktop.sh" \
+    "${release_directory}/macos_shortcut.sh" \
     "${release_directory}/bluehive-aurora.svg" \
     "${release_directory}/build_vnc_image.sh" \
     "${release_directory}/bh-env.sh" \
@@ -1193,6 +1194,9 @@ active_environment_generation="$(
 )"
 active_vnc_geometry="$(
     read_state_value "${connection_file}" VNC_GEOMETRY
+)"
+active_macos_shortcuts_status="$(
+    read_state_value "${connection_file}" MACOS_SHORTCUTS_STATUS || true
 )"
 active_container_instance_name="$(
     read_state_value "${connection_file}" CONTAINER_INSTANCE_NAME
@@ -1837,14 +1841,39 @@ else
 fi
 log_message "VNC address: ${vnc_url}"
 log_message "VNC geometry: ${active_vnc_geometry}"
-log_message "Text clipboard: enabled; in Screen Sharing use Edit > Use Shared Clipboard."
+log_message "Text clipboard: enabled."
+log_message \
+    "macOS application shortcuts: ${active_macos_shortcuts_status:-UNAVAILABLE}"
 log_message \
     "VNC password file: ${vnc_user_service_directory}/state/vnc-password.txt"
 
 if [[ "${open_vnc_viewer}" == "true" ]]; then
     command -v open >/dev/null 2>&1 || fail "open is unavailable; use ${vnc_url}"
-    log_message "Opening Screen Sharing; enter the VNC password manually."
-    open "${vnc_url}"
+    tiger_vnc_application="/Applications/TigerVNC.app"
+    tiger_vnc_executable="${tiger_vnc_application}/Contents/MacOS/vncviewer"
+    if [[ -x "${tiger_vnc_executable}" ]]; then
+        log_message \
+            "Opening TigerVNC; enter the VNC password manually."
+        log_message \
+            "Use Control+Option+G to capture macOS system shortcuts;" \
+            "Control+Option releases them."
+        open -na "${tiger_vnc_application}" --args \
+            -AcceptClipboard=1 \
+            -SendClipboard=1 \
+            -SendPrimary=1 \
+            -SetPrimary=1 \
+            -MaxCutText=1048576 \
+            -RemoteResize=0 \
+            -SecurityTypes=VncAuth \
+            -Shared=1 \
+            -ShortcutModifiers=Ctrl,Alt \
+            "127.0.0.1::${local_vnc_port}"
+    else
+        log_message \
+            "TigerVNC is not installed; opening Screen Sharing instead."
+        log_message "Enter the VNC password manually."
+        open "${vnc_url}"
+    fi
 else
     log_message "Viewer launch skipped (--no-open)."
 fi

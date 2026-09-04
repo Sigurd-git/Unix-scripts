@@ -63,6 +63,14 @@ checks TigerVNC's bidirectional text clipboard, desktop-resize, and blacklist
 parameters after startup. RFB remains loopback-only with `VncAuth`, so macOS
 Screen Sharing reaches it through the managed SSH tunnel.
 
+`configure_desktop.sh` owns the persistent XFCE profile and registers Super-key
+application shortcuts. `macos_shortcut.sh` uses the focused window class to
+translate those actions: XFCE Terminal receives its Control+Shift variants,
+while regular GUI applications receive Control variants. This preserves shell
+Control+C, Control+Z, and Control+S semantics. `xdotool` is part of newly built
+mutable environments; an existing mutable generation needs it installed once
+before the profile reports `MACOS_SHORTCUTS=READY`.
+
 `bh-env.sh` provides interactive shells, command execution, Slurm submission,
 checkpoints, restore, and clean rebuilds. `bh-env sbatch` copies the original
 `#SBATCH` directives and starts the whole Bash script inside the sandbox. VNC

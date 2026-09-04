@@ -54,6 +54,7 @@ unzip
 vim-tiny
 wget
 xdg-utils
+xdotool
 xvfb
 xz-utils
 zip

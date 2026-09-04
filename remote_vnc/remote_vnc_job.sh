@@ -189,6 +189,7 @@ trap cleanup EXIT INT TERM
 for required_file in \
     "${start_vnc_script}" \
     "${release_directory}/configure_desktop.sh" \
+    "${release_directory}/macos_shortcut.sh" \
     "${release_directory}/bluehive-aurora.svg" \
     "${release_directory}/start_opencodex.sh" \
     "${build_vnc_image_script}" \
@@ -206,6 +207,7 @@ done
 for required_executable in \
     "${start_vnc_script}" "${build_vnc_image_script}" \
     "${release_directory}/configure_desktop.sh" \
+    "${release_directory}/macos_shortcut.sh" \
     "${release_directory}/start_opencodex.sh" \
     "${prepare_environment_script}" "${environment_common_helpers}" \
     "${remote_sshd_helper}"; do
