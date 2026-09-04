@@ -15,6 +15,7 @@ current_user="$(id -un)"
 current_user_id="$(id -u)"
 host_home="${HOME:?HOME is required}"
 container_home="/home/${current_user}"
+shared_codex_home="${host_home}/.codex"
 job_state_directory="${user_service_directory}/state/jobs/${job_id}"
 service_directory="${job_state_directory}/opencodex"
 service_state_file="${service_directory}/service.env"
@@ -23,7 +24,7 @@ opencodex_log_file="${service_directory}/opencodex.log"
 runtime_directory="${service_directory}/runtime"
 environment_common_helpers="${release_directory}/environment_common.sh"
 container_codex_home="${container_home}/.codex"
-host_codex_home="${environment_home}/.codex"
+persistent_codex_home="${environment_home}/.codex"
 codex_seed_standalone_directory="/opt/codex-home/packages/standalone"
 container_codex_standalone_directory="${container_codex_home}/packages/standalone"
 managed_codex_executable="${container_codex_standalone_directory}/current/bin/codex"
@@ -87,7 +88,6 @@ container_start_options=()
 bh_env_append_runtime_options \
     container_start_options "${environment_home}" "${runtime_directory}" "" service
 container_start_options+=(
-    --env "CODEX_HOME=${container_codex_home}"
     --env "OPENCODEX_HOME=${container_home}/.opencodex"
     --env "PATH=${container_command_path}"
 )
@@ -175,7 +175,11 @@ write_service_state() {
         printf 'NODE=%s\n' "$(hostname -s)"
         printf 'ENVIRONMENT_NAME=%s\n' "${environment_name}"
         printf 'ENVIRONMENT_HOME=%s\n' "${environment_home}"
-        printf 'CODEX_HOME=%s\n' "${host_codex_home}"
+        printf 'CODEX_HOME=%s\n' "${persistent_codex_home}"
+        printf 'CODEX_SQLITE_HOME=%s\n' "${shared_codex_home}"
+        printf 'CODEX_SESSION_STORE=%s\n' \
+            "${shared_codex_home}/sessions"
+        printf 'CODEX_SESSION_SHARING=HOST\n'
         printf 'CODEX_EXECUTABLE=%s\n' "${managed_codex_executable}"
         printf 'MIGRATION_STATUS=%s\n' "${migration_status}"
         printf 'CONTAINER_INSTANCE_NAME=%s\n' "${service_instance_name}"
@@ -579,9 +583,9 @@ run_in_container /bin/bash -c '
     >> "${service_log_file}" 2>&1 &
 app_server_launcher_process_id=$!
 
-app_server_pid_file="${host_codex_home}/app-server-daemon/app-server.pid"
-app_server_updater_pid_file="${host_codex_home}/app-server-daemon/app-server-updater.pid"
-app_server_control_socket="${host_codex_home}/app-server-control/app-server-control.sock"
+app_server_pid_file="${persistent_codex_home}/app-server-daemon/app-server.pid"
+app_server_updater_pid_file="${persistent_codex_home}/app-server-daemon/app-server-updater.pid"
+app_server_control_socket="${persistent_codex_home}/app-server-control/app-server-control.sock"
 for ((attempt_number = 1; attempt_number <= 60; attempt_number++)); do
     if ! kill -0 "${app_server_launcher_process_id}" 2>/dev/null; then
         printf 'Codex app-server launcher exited before becoming ready. Log: %s\n' \

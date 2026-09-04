@@ -582,10 +582,18 @@ The first mutable launch copies the existing host configuration into that
 environment's private persistent home. This includes the current OpenCodex
 configuration and authentication files, Codex `config.toml`, authentication,
 catalog settings, `AGENTS.md`, personal skills, plugin files, memories, and
-imported skill sources. Existing destination files are preserved. Runtime PIDs,
-sockets, logs, histories, sessions, and response state are excluded. Later
-launches use the container copy, so changes made there persist without repeating
-this migration.
+imported skill sources. Existing destination files are preserved. OpenCodex
+routing, Codex authentication, packages, logs, and app-server sockets remain
+private to the environment.
+
+BlueHive `$HOME/.codex` is the canonical Codex session store. Every mutable or
+immutable container mounts the host `sessions`, `archived_sessions`,
+`attachments`, `plans`, `shell_snapshots`, `visualizations`, shared writer
+locks, history, and session index into its private `CODEX_HOME`, while
+`CODEX_SQLITE_HOME` points to the host state directory. New and updated
+sessions therefore appear immediately from both the host and container without
+copying. Existing container-only session files are hidden and are no longer
+used. The host terminal continues to use `$HOME/.codex` directly.
 
 Startup verifies the Apptainer instance, OpenCodex proxy, and Codex app-server
 PIDs against the VNC job's batch cgroup before marking the job ready. Service

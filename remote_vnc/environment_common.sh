@@ -129,15 +129,23 @@ bh_env_append_runtime_options() {
     local access_mode="${5:-normal}"
     local current_user
     local host_home
+    local host_codex_home
     local container_home
+    local container_codex_home
     local container_tmp_directory
+    local persistent_codex_home
+    local shared_codex_directory
+    local shared_codex_file
     local bind_path
     local slurm_variable_name
     local -n runtime_options="${options_array_name}"
 
     current_user="$(id -un)"
     host_home="${HOME:?HOME is required}"
+    host_codex_home="${host_home}/.codex"
     container_home="/home/${current_user}"
+    container_codex_home="${container_home}/.codex"
+    persistent_codex_home="${persistent_home}/.codex"
 
     [[ -d "${persistent_home}" ]] || {
         printf 'Persistent container home is missing: %s\n' \
@@ -146,6 +154,9 @@ bh_env_append_runtime_options() {
     }
     mkdir -p "${runtime_directory}"
     chmod 700 "${runtime_directory}"
+
+    mkdir -p "${host_codex_home}" "${persistent_codex_home}"
+    chmod 700 "${host_codex_home}" "${persistent_codex_home}"
 
     runtime_options=(exec)
     if [[ "${access_mode}" == "admin" ]]; then
@@ -170,6 +181,44 @@ bh_env_append_runtime_options() {
         --bind "/:/host:ro"
         --bind "${host_home}:/bluehive-home"
     )
+    # Keep proxy configuration and app-server sockets private to this
+    # environment while using the BlueHive host as the canonical Codex session
+    # store. Directory mounts preserve atomic session writes, and shared writer
+    # locks coordinate host and container access to the same threads.
+    for shared_codex_directory in \
+        archived_sessions attachments plans sessions shell_snapshots \
+        thread-writer-locks visualizations; do
+        mkdir -p \
+            "${host_codex_home}/${shared_codex_directory}" \
+            "${persistent_codex_home}/${shared_codex_directory}"
+        chmod 700 \
+            "${host_codex_home}/${shared_codex_directory}" \
+            "${persistent_codex_home}/${shared_codex_directory}"
+        runtime_options+=(
+            --bind "${host_codex_home}/${shared_codex_directory}:${container_codex_home}/${shared_codex_directory}"
+        )
+    done
+    for shared_codex_file in history.jsonl session_index.jsonl; do
+        if [[ ! -e "${host_codex_home}/${shared_codex_file}" ]]; then
+            : > "${host_codex_home}/${shared_codex_file}"
+            chmod 600 "${host_codex_home}/${shared_codex_file}"
+        fi
+        if [[ ! -e "${persistent_codex_home}/${shared_codex_file}" ]]; then
+            : > "${persistent_codex_home}/${shared_codex_file}"
+            chmod 600 "${persistent_codex_home}/${shared_codex_file}"
+        fi
+        [[ -f "${host_codex_home}/${shared_codex_file}" &&
+           ! -L "${host_codex_home}/${shared_codex_file}" &&
+           -f "${persistent_codex_home}/${shared_codex_file}" &&
+           ! -L "${persistent_codex_home}/${shared_codex_file}" ]] || {
+            printf 'Codex shared state must be regular files: %s\n' \
+                "${shared_codex_file}" >&2
+            return 1
+        }
+        runtime_options+=(
+            --bind "${host_codex_home}/${shared_codex_file}:${container_codex_home}/${shared_codex_file}"
+        )
+    done
     if [[ "${access_mode}" == "admin" ||
           "${access_mode}" == "service" ]]; then
         container_tmp_directory="${runtime_directory}/tmp"
@@ -191,6 +240,8 @@ bh_env_append_runtime_options() {
         --env "USER=${current_user}"
         --env "LOGNAME=${current_user}"
         --env "BH_ENV_ACTIVE=1"
+        --env "CODEX_HOME=${container_codex_home}"
+        --env "CODEX_SQLITE_HOME=/bluehive-home/.codex"
         --env "XDG_CONFIG_HOME=${container_home}/.config"
         --env "XDG_CACHE_HOME=${container_home}/.cache"
         --env "XDG_DATA_HOME=${container_home}/.local/share"

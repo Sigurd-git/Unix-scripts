@@ -298,7 +298,7 @@ configured_remote_ssh_port="${REMOTE_VNC_SSH_PORT}"
 [[ "${configured_remote_ssh_port}" =~ ^[0-9]+$ ]] &&
     ((configured_remote_ssh_port >= 44000 && configured_remote_ssh_port <= 44999)) ||
     fail "line 4 of ${USER_PASSWORD_FILE} must be a port from 44000 to 44999"
-managed_launcher_comment="remote-vnc-managed-v13:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
+managed_launcher_comment="remote-vnc-managed-v14:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
 
 CLUSTER="${cluster_name}"
 HOSTNAME="$(cluster_hostname "${cluster_name}")" || exit 1
@@ -591,7 +591,7 @@ environment_mode="${18}"
 environment_build_timeout_seconds="${19}"
 requested_remote_ssh_port="${20}"
 vnc_geometry="${21}"
-managed_launcher_version="13"
+managed_launcher_version="14"
 
 if [[ "${requested_node}" == "__REMOTE_VNC_SCHEDULER__" ]]; then
     requested_node=""
@@ -713,7 +713,7 @@ job_uses_managed_launcher() {
         tr ' ' '\n' <<< "${job_record}" |
             awk -F= '$1 == "Comment" { print $2; exit }'
     )"
-    [[ "${job_comment}" == remote-vnc-managed-v13:* ]]
+    [[ "${job_comment}" == remote-vnc-managed-v14:* ]]
 }
 
 managed_launcher_is_ready() {
@@ -1683,6 +1683,13 @@ if [[ "${environment_mode}" == "mutable" ]]; then
     test -d /scratch
     test -d /bluehive-home
     test -d /host
+    [[ "${CODEX_HOME:-}" == "${HOME}/.codex" ]]
+    [[ "${CODEX_SQLITE_HOME:-}" == "/bluehive-home/.codex" ]]
+    [[ "$(stat -Lc '%d:%i' "${CODEX_HOME}/sessions")" == \
+       "$(stat -Lc '%d:%i' /bluehive-home/.codex/sessions)" ]]
+    [[ "$(stat -Lc '%d:%i' "${CODEX_HOME}/archived_sessions")" == \
+       "$(stat -Lc '%d:%i' /bluehive-home/.codex/archived_sessions)" ]]
+    printf 'CODEX_SESSION_SHARING=host\n'
     printf 'SOFTWARE=available\n'
 
     host_record="$(
@@ -1726,6 +1733,8 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
         fail "the container SSH home is incorrect"
     grep -q '^SOFTWARE=available$' <<< "${validation_record}" ||
         fail "the container SSH shell is missing required software or mounts"
+    grep -q '^CODEX_SESSION_SHARING=host$' <<< "${validation_record}" ||
+        fail "the container does not share the BlueHive host Codex sessions"
     grep -q '^BH_ENV_PROXY=available$' <<< "${validation_record}" ||
         fail "the container bh-env host proxy failed"
     grep -q '^ADMIN_UID=0$' <<< "${validation_record}" ||
@@ -1808,6 +1817,9 @@ local_state_temporary_file="$(mktemp "${local_connection_state_file}.XXXXXX")"
     printf 'OPENCODEX_PORT=%s\n' "${active_opencodex_port}"
     printf 'OPENCODEX_MIGRATION_STATUS=%s\n' \
         "${active_opencodex_migration_status}"
+    printf 'CODEX_SESSION_SHARING=HOST\n'
+    printf 'CODEX_SESSION_STORE=/home/%s/.codex/sessions\n' \
+        "${remote_user_name}"
     printf 'CODEX_APP_SERVER_STATUS=%s\n' \
         "${active_codex_app_server_status}"
     printf 'CODEX_APP_SERVER_PID=%s\n' \
@@ -1838,6 +1850,8 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
     log_message \
         "Codex app server=${active_codex_app_server_status}" \
         "PID=${active_codex_app_server_process_id}"
+    log_message \
+        "Codex sessions=shared with /home/${remote_user_name}/.codex"
     log_message \
         "OpenCodex dashboard: http://127.0.0.1:${local_opencodex_port}"
 else

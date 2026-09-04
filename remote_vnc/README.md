@@ -35,8 +35,13 @@ personal skills, plugins, memories, and imported skill sources into the private
 persistent container home on its first launch. It then creates a job-scoped
 Apptainer service instance and supervises `ocx start` and the Codex app-server
 daemon inside it. Host-side `ocx` and `codex` wrappers join this instance so all
-service commands share its PID namespace. The VNC job is reported ready only
-after the instance and both services pass their health and cgroup checks.
+service commands share its PID namespace. `environment_common.sh` keeps
+OpenCodex configuration and app-server sockets private, but mounts the host
+Codex session directories, indexes, attachments, artifacts, and writer locks
+into every container and points `CODEX_SQLITE_HOME` to the host `.codex` state.
+The host is therefore the canonical live session store. The VNC job is reported
+ready only after the instance, both services, and the host-session mounts pass
+their health and cgroup checks.
 For mutable environments, `remote_vnc_job_sshd.sh` starts the public SSH server
 inside the read-only sandbox. `ssh blhc3` therefore opens Fish directly in the
 container, while SFTP, VNC forwarding, and OpenCodex forwarding use the same

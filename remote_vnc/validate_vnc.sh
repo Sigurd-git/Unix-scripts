@@ -55,6 +55,9 @@ opencodex_port="$(read_connection_value OPENCODEX_PORT)"
 opencodex_log_file="$(read_connection_value OPENCODEX_LOG)"
 opencodex_migration_status="$(read_connection_value OPENCODEX_MIGRATION_STATUS)"
 codex_home_directory="$(read_connection_value CODEX_HOME)"
+codex_sqlite_home_directory="$(read_connection_value CODEX_SQLITE_HOME)"
+codex_session_store="$(read_connection_value CODEX_SESSION_STORE)"
+codex_session_sharing="$(read_connection_value CODEX_SESSION_SHARING)"
 codex_app_server_status="$(read_connection_value CODEX_APP_SERVER_STATUS)"
 codex_app_server_process_id="$(read_connection_value CODEX_APP_SERVER_PID)"
 
@@ -128,6 +131,16 @@ if [[ "${environment_mode}" == "mutable" ]]; then
        -d "${codex_home_directory}" ]] || {
         printf 'Container Codex home is invalid: %s\n' \
             "${codex_home_directory:-not set}" >&2
+        exit 3
+    }
+    [[ "${codex_sqlite_home_directory}" == "${HOME}/.codex" &&
+       "${codex_session_store}" == "${HOME}/.codex/sessions" &&
+       "${codex_session_sharing}" == "HOST" &&
+       -d "${codex_session_store}" ]] || {
+        printf 'Codex host-session sharing is invalid: mode=%s sqlite=%s sessions=%s\n' \
+            "${codex_session_sharing:-not set}" \
+            "${codex_sqlite_home_directory:-not set}" \
+            "${codex_session_store:-not set}" >&2
         exit 3
     }
     [[ -e "${opencodex_log_file}" ]] || {
@@ -360,7 +373,7 @@ if [[ "$(hostname -s)" == "${node_name}" ]]; then
                 -o "UserKnownHostsFile=${host_shell_known_hosts}" \
                 -o GlobalKnownHostsFile=/dev/null \
                 "${current_user}@127.0.0.1" \
-                'ocx ready --json | grep -Eq "\"ready\"[[:space:]]*:[[:space:]]*true"; codex app-server daemon version | grep -Eq "\"status\"[[:space:]]*:[[:space:]]*\"running\""; printf OPENCODEX_RUNTIME_OK' \
+                'ocx ready --json | grep -Eq "\"ready\"[[:space:]]*:[[:space:]]*true"; codex app-server daemon version | grep -Eq "\"status\"[[:space:]]*:[[:space:]]*\"running\""; test "${CODEX_SQLITE_HOME:-}" = /bluehive-home/.codex; test "$(stat -Lc "%d:%i" "${CODEX_HOME}/sessions")" = "$(stat -Lc "%d:%i" /bluehive-home/.codex/sessions)"; test "$(stat -Lc "%d:%i" "${CODEX_HOME}/archived_sessions")" = "$(stat -Lc "%d:%i" /bluehive-home/.codex/archived_sessions)"; printf OPENCODEX_RUNTIME_OK' \
                 2>/dev/null || true
         )"
         [[ "${opencodex_runtime_check}" == "OPENCODEX_RUNTIME_OK" ]] || {
@@ -413,6 +426,11 @@ printf 'OpenCodex: %s (PID %s, port %s)\n' \
     "${opencodex_port:-not set}"
 printf 'OpenCodex settings migration: %s\n' \
     "${opencodex_migration_status:-not set}"
+printf 'Codex session sharing: %s (%s)\n' \
+    "${codex_session_sharing:-not set}" \
+    "${codex_session_store:-not set}"
+printf 'Codex SQLite home: %s\n' \
+    "${codex_sqlite_home_directory:-not set}"
 printf 'Codex app server: %s (PID %s)\n' \
     "${codex_app_server_status:-not set}" \
     "${codex_app_server_process_id:-not set}"

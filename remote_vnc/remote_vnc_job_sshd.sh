@@ -259,6 +259,7 @@ write_container_ssh_files() {
         printf 'export BH_ENV_HOST_COMMAND=%q\n' \
             "${host_home}/.local/bin/bh-env"
         printf 'export CODEX_HOME=%q\n' "${container_home}/.codex"
+        printf 'export CODEX_SQLITE_HOME=%q\n' /bluehive-home/.codex
         printf 'export DISPLAY=%q\n' "${display_value}"
         printf 'export XAUTHORITY=%q\n' "${container_home}/.Xauthority"
         printf 'export XDG_CONFIG_HOME=%q\n' "${container_home}/.config"

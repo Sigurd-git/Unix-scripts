@@ -14,6 +14,7 @@ vnc_geometry="${8:-2560x1440}"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 current_user="$(id -un)"
 host_home="${HOME:?HOME is required}"
+host_codex_home="${host_home}/.codex"
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${job_id}"
 session_home="${requested_session_home:-${job_state_directory}/home}"
@@ -48,6 +49,9 @@ opencodex_port=""
 opencodex_log_file=""
 opencodex_migration_status="NOT_RUN"
 codex_home_directory=""
+codex_sqlite_home_directory="${host_codex_home}"
+codex_session_store="${host_codex_home}/sessions"
+codex_session_sharing="HOST"
 codex_app_server_status="NOT_RUN"
 codex_app_server_process_id=""
 container_instance_name=""
@@ -490,7 +494,8 @@ chmod 600 "${host_shell_known_hosts}"
     printf 'export DISPLAY=%q\n' "${display_value}"
     printf 'export XAUTHORITY=%q\n' "${session_home}/.Xauthority"
     printf 'export BH_ENV_NAME=%q\n' "${environment_name}"
-    printf 'export CODEX_HOME=%q\n' "${session_home}/.codex"
+    printf 'export CODEX_HOME=%q\n' "${host_codex_home}"
+    printf 'export CODEX_SQLITE_HOME=%q\n' "${host_codex_home}"
     printf 'export PATH=%q:"${HOME}/.local/bin:${PATH}"\n' \
         "${host_path_prefix}"
     printf 'matlab-vnc() { %q %q "$@"; }\n' \
@@ -508,9 +513,9 @@ chmod 600 "${host_shell_known_hosts}"
         fi
     done
     printf 'if [[ -n "${SSH_ORIGINAL_COMMAND:-}" ]]; then\n'
-    printf '    exec /bin/bash -c %q -- "${SSH_ORIGINAL_COMMAND}" %q %q\n' \
-        'source /etc/profile 2>/dev/null || true; export PATH="$2:${HOME}/.local/bin:${PATH}"; export CODEX_HOME="$3"; eval "$1"' \
-        "${host_path_prefix}" "${session_home}/.codex"
+    printf '    exec /bin/bash -c %q -- "${SSH_ORIGINAL_COMMAND}" %q %q %q\n' \
+        'source /etc/profile 2>/dev/null || true; export PATH="$2:${HOME}/.local/bin:${PATH}"; export CODEX_HOME="$3"; export CODEX_SQLITE_HOME="$4"; eval "$1"' \
+        "${host_path_prefix}" "${host_codex_home}" "${host_codex_home}"
     printf 'fi\n'
     printf 'exec /bin/bash --rcfile %q -i\n' "${host_shell_rc_file}"
 } > "${host_shell_entry_script}"
@@ -523,7 +528,8 @@ chmod 700 "${host_shell_entry_script}"
     printf 'export DISPLAY=%q\n' "${display_value}"
     printf 'export XAUTHORITY=%q\n' "${session_home}/.Xauthority"
     printf 'export BH_ENV_NAME=%q\n' "${environment_name}"
-    printf 'export CODEX_HOME=%q\n' "${session_home}/.codex"
+    printf 'export CODEX_HOME=%q\n' "${host_codex_home}"
+    printf 'export CODEX_SQLITE_HOME=%q\n' "${host_codex_home}"
     printf 'export PATH=%q:"${HOME}/.local/bin:${PATH}"\n' \
         "${host_path_prefix}"
     printf 'matlab-vnc() { %q %q "$@"; }\n' \
@@ -992,6 +998,15 @@ if [[ "${environment_mode}" == "mutable" ]]; then
     codex_home_directory="$(
         read_state_value "${opencodex_service_state_file}" CODEX_HOME
     )"
+    codex_sqlite_home_directory="$(
+        read_state_value "${opencodex_service_state_file}" CODEX_SQLITE_HOME
+    )"
+    codex_session_store="$(
+        read_state_value "${opencodex_service_state_file}" CODEX_SESSION_STORE
+    )"
+    codex_session_sharing="$(
+        read_state_value "${opencodex_service_state_file}" CODEX_SESSION_SHARING
+    )"
     codex_app_server_status="$(
         read_state_value \
             "${opencodex_service_state_file}" CODEX_APP_SERVER_STATUS
@@ -1063,6 +1078,9 @@ connection_temporary_file="${connection_file}.tmp.${job_id}"
     printf 'OPENCODEX_MIGRATION_STATUS=%s\n' \
         "${opencodex_migration_status}"
     printf 'CODEX_HOME=%s\n' "${codex_home_directory}"
+    printf 'CODEX_SQLITE_HOME=%s\n' "${codex_sqlite_home_directory}"
+    printf 'CODEX_SESSION_STORE=%s\n' "${codex_session_store}"
+    printf 'CODEX_SESSION_SHARING=%s\n' "${codex_session_sharing}"
     printf 'CODEX_APP_SERVER_STATUS=%s\n' "${codex_app_server_status}"
     printf 'CODEX_APP_SERVER_PID=%s\n' \
         "${codex_app_server_process_id}"
