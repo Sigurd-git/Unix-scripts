@@ -812,6 +812,15 @@ vnc_connection_is_ready() {
         [[ "${job_state}" == "RUNNING" ]]
 }
 
+# Serialize discovery, cancellation, submission, and readiness across clients.
+# Keep this separate from the allocation lock so --restart can stop its owner.
+mkdir -p "${user_service_directory}/state"
+exec 8>"${user_service_directory}/state/launch.lock"
+flock -n 8 || {
+    printf 'Another VNC launch or restart is in progress. Wait for it to finish before retrying.\n' >&2
+    exit 8
+}
+
 job_id="$(read_state_value "${connection_file}" JOB_ID || true)"
 if [[ "${restart_existing_job}" != "true" && "${job_id}" =~ ^[0-9]+$ ]] &&
    vnc_connection_is_ready "${job_id}"; then
@@ -985,7 +994,7 @@ else
             printf 'VNC Job %s left the queue before becoming ready.\n' \
                 "${job_id}" >&2
             tail -n 120 "${user_service_directory}/logs/${job_name}_${job_id}.err" \
-                2>/dev/null || true
+                >&2 2>/dev/null || true
             exit 4
         }
 

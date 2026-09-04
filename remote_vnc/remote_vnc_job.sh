@@ -16,7 +16,7 @@ environment_build_timeout_seconds="${10:-10800}"
 requested_remote_ssh_port="${11:?fixed remote SSH port is required}"
 vnc_geometry="${12:-2560x1440}"
 
-launcher_version="12"
+launcher_version="14"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${job_id}"
@@ -229,6 +229,15 @@ mkdir -p \
 chmod 700 "${user_service_directory}" "${state_directory}" \
     "${job_state_directory}" "${user_service_directory}/images" \
     "${user_service_directory}/environments"
+
+# Hold this lock until all services stop, including for direct sbatch launches.
+# Concurrent jobs share desktop files, proxy state, and app-server sockets.
+exec 9>"${state_directory}/allocation.lock"
+flock -n 9 || {
+    printf 'Another VNC job owns %s. Refusing to start duplicate services for Job %s.\n' \
+        "${user_service_directory}" "${job_id}" >&2
+    exit 8
+}
 write_launcher_state "CHECKING_IMAGE"
 
 selected_image_path="$(

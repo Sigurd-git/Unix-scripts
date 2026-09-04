@@ -4,6 +4,12 @@
 `$REMOTE_SHARED_ROOT/remote-vnc/releases/`. Release files are read-only after
 their checksums pass.
 
+The Mac launcher holds `users/$USER/state/launch.lock` while checking,
+replacing, and waiting for a job. A concurrent launch fails with a retry message.
+Each allocation also holds `state/allocation.lock` until its services stop,
+including jobs submitted directly with `sbatch`. This prevents two jobs from
+changing the same desktop files, OpenCodex state, or app-server sockets.
+
 `configure_desktop.sh` installs a pinned WhiteSur light theme in the user's
 persistent home and applies a versioned XFCE profile without replacing panel
 plugins or launchers. `bluehive-aurora.svg` is the bundled 2560x1440 background.
