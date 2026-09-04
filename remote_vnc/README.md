@@ -31,9 +31,17 @@ Apptainer service instance and supervises `ocx start` and the Codex app-server
 daemon inside it. Host-side `ocx` and `codex` wrappers join this instance so all
 service commands share its PID namespace. The VNC job is reported ready only
 after the instance and both services pass their health and cgroup checks.
-`remote_vnc_job_sshd.sh` permits forwarding only to the active VNC and
-OpenCodex loopback ports; the Mac-side launcher verifies the dashboard through
-`http://127.0.0.1:10102` before reporting success.
+For mutable environments, `remote_vnc_job_sshd.sh` starts the public SSH server
+inside the read-only sandbox. `ssh blhc3` therefore opens Fish directly in the
+container, while SFTP, VNC forwarding, and OpenCodex forwarding use the same
+Slurm-bound connection. `bluehive-host-shell` returns to the allocation host.
+The container commands `bh-env`, `bh-admin`, and `sbatch` proxy short host-side
+operations through that private backchannel. The Mac-side launcher verifies the
+container identity, interactive PTY, host backchannel, fakeroot admin command,
+SFTP, VNC, and `http://127.0.0.1:10102` before reporting success. A private
+job-specific `/etc/group` view omits the unmapped `tty` group, allowing the
+non-root OpenSSH monitor to assign container PTYs to the user's mapped primary
+group.
 
 `bh-env.sh` provides interactive shells, command execution, Slurm submission,
 checkpoints, restore, and clean rebuilds. `bh-env sbatch` copies the original
@@ -42,7 +50,9 @@ environment terminals and interactive `bh-env` shells default to Fish; host
 terminal and batch execution remain Bash-based. VNC terminal and MATLAB
 launchers enter the current generation through the allocation's private SSH
 service, allowing a running desktop to use software installed after its initial
-Apptainer mount was created.
+Apptainer mount was created. From the direct container SSH shell, `bh-env shell`
+or `bh-env exec -- COMMAND` also starts a fresh mount. Restart the VNC job when
+all long-running container namespaces should reload a changed rootfs.
 
 Passwords, SSH keys, logs, environments, checkpoints, and job state remain
 under the same private user directory with mode `0700`.

@@ -49,6 +49,28 @@ bh_env_require_slurm_allocation() {
     }
 }
 
+bh_env_find_slurm_executable() {
+    local command_name="$1"
+    local candidate_path
+
+    [[ "${command_name}" =~ ^[A-Za-z0-9._+-]+$ ]] || return 1
+    candidate_path="$(command -v "${command_name}" 2>/dev/null || true)"
+    if [[ -x "${candidate_path}" ]]; then
+        printf '%s\n' "${candidate_path}"
+        return 0
+    fi
+
+    for candidate_path in \
+        /sfw/rhel9-x86_64/slurm/*/bin/"${command_name}"; do
+        if [[ -x "${candidate_path}" ]]; then
+            printf '%s\n' "${candidate_path}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 bh_env_environment_directory() {
     local user_service_directory="$1"
     local environment_name="$2"

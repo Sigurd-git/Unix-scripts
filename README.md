@@ -8,9 +8,9 @@ My macOS scripts for convenient cluster management using iTerm or Terminal, with
 - **Automatic Hostname Mapping**: Supports bluehive, bluehive3, and bhward clusters with automatic hostname resolution
 - **Reusable Login Connection**: Reuses an OpenSSH control master, so a running connection does not request the login password again
 - **Slurm-aware Remote Access**: Starts VS Code/Cursor tunnels, Dropbear SSHD, or VNC inside separate Slurm jobs
-- **VNC Compute Shell**: `ssh blhc3` and the XFCE Host Terminal use the VNC job's CPU, memory, GPU, and cgroup
+- **Container SSH and SFTP**: `ssh blhc3` opens Fish inside the VNC job's Apptainer environment while preserving its Slurm cgroup
 - **Persistent Apptainer Environment**: Gives each user a writable fakeroot sandbox with `apt`, MATLAB, CUDA, Chrome, ChatGPT, uv, pixi, and compilers
-- **Container Batch Jobs**: `bh-env sbatch job.sh` preserves the script's `#SBATCH` directives and runs the complete Bash script in the environment
+- **Container Batch Jobs**: `sbatch job.sh` from the container preserves the script's `#SBATCH` directives and runs the complete Bash script in the environment
 - **Self-deploying Remote Files**: Copies missing tools and checksum-versioned VNC files under `REMOTE_SHARED_ROOT`
 - **Real-time Output**: Shows job state, allocated node, startup stage, and failure logs
 
@@ -171,24 +171,25 @@ For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.
 desktop. The default `default` environment is a persistent writable sandbox.
 The job remains separate from the `my_sshd` job created by `remote_sshd.sh`.
 
-The VNC job starts two host-side SSH services:
+The VNC job starts two SSH services:
 
-- The Mac connects to a public-key-only service using `ssh blhc3`.
-- The **Bluehive Host Terminal** inside XFCE connects back to the compute host.
+- The Mac connects with `ssh blhc3` to a public-key-only sshd running inside
+  the read-only Apptainer rootfs.
+- The container and the **Bluehive Host Terminal** use a private localhost sshd
+  to return to the compute host.
 
-Both shells inherit the VNC job's Slurm environment and batch cgroup. They can
-use host programs, environment modules, `/gpfs/fs1`, `/gpfs/fs2`, and
-`/scratch` without escaping the allocated CPU, memory, or GPU limits.
+Both services inherit the VNC job's Slurm environment and batch cgroup. The
+container has its installed software, allocated GPU, `/gpfs/fs1`, `/gpfs/fs2`,
+`/scratch`, and SFTP. Run `bluehive-host-shell` for host programs and modules.
 
 The sandbox maps the current user to root only inside the container when
 `bh-env admin` is running. It cannot change the host, read files the account
 cannot normally read, request unallocated GPUs, or bypass Slurm limits.
 
 For a mutable environment, the job also starts OpenCodex and Codex app-server
-inside one job-scoped Apptainer service instance. `ocx` and `codex` entered
-through `ssh blhc3` join that same instance, so the client, proxy, and daemon
-share one PID namespace. Ordinary SSH commands continue to run on the compute
-host.
+inside one job-scoped Apptainer service instance. The direct container SSH
+entry, VNC desktop, proxy, and daemon share the same persistent home and
+network. Host operations remain available through `bluehive-host-shell`.
 
 #### Start or reuse VNC
 
@@ -337,23 +338,22 @@ eight. Restart the VNC job so it regenerates TigerVNC's password file:
 
 #### Compute shell and OpenCodex
 
-After startup, connect directly to the allocation:
+After startup, connect directly to the mutable Apptainer environment:
 
 ```bash
 ssh blhc3
 ```
 
-Enter the persistent environment after connecting:
+The login shell is Fish. Return to a Bash shell on the allocated compute host
+when modules or host-only programs are needed:
 
 ```bash
-bh-env shell
+bluehive-host-shell
 ```
 
-Interactive environment and admin shells use Fish by default. The Bluehive
-Host Terminal and `bh-env sbatch` continue to use Bash for module and batch
-script compatibility. Each newly opened environment terminal enters the current
-generation through the job-local SSH service, so software installed with
-`bh-env admin` is available without restarting the VNC desktop.
+The host backchannel, container sshd, and their child processes stay in the
+same Slurm batch cgroup. SFTP also opens the persistent container home at
+`/home/$USER`.
 
 The VNC desktop itself already runs in this environment. Its desktop contains
 launchers for an environment terminal, an admin terminal, Google Chrome,
@@ -383,27 +383,39 @@ BlueHive network license file through its `/gpfs/fs1` mount.
 
 #### Install software and preserve changes
 
-Open a writable fakeroot shell from `ssh blhc3`:
+The SSH rootfs stays read-only. Open a short-lived writable fakeroot shell when
+system packages need to change:
 
 ```bash
-bh-env admin
+bh-admin
 apt-get update
 apt-get install -y ffmpeg
 exit
+bh-env shell
 ```
 
 Or run one command directly:
 
 ```bash
-bh-env admin -- apt-get install -y ffmpeg
+bh-admin -- apt-get install -y ffmpeg
 ```
+
+`bh-admin` proxies to the host-side `bh-env admin`, holds the environment's
+mutation lock only for that command or shell, and releases it on exit. The
+familiar `bh-env` command is also proxied through the same backchannel.
+
+`bh-env shell` opens a fresh container mount, so it sees packages installed by
+the preceding admin shell immediately. `bh-env exec -- COMMAND`, new batch
+jobs, and new **Environment Terminal** launchers do the same. Use
+`./remote_vnc.sh --restart` when the base `ssh blhc3` shell, the existing VNC
+desktop, OpenCodex, and Codex app-server should all reload the changed rootfs.
 
 Changes to the sandbox and its home directory persist across VNC jobs. Use a
 named environment when separate software stacks are useful:
 
 ```bash
 ./remote_vnc.sh --env experiment --restart
-ssh blhc3 -t 'bh-env --env experiment shell'
+ssh blhc3
 ```
 
 `--immutable` starts the prior read-only SIF workflow, skips sandbox creation,
@@ -412,10 +424,10 @@ or mode for an active VNC allocation requires `--restart`.
 
 #### Submit batch scripts in the environment
 
-Run this from a BlueHive login shell or from `ssh blhc3`:
+From `ssh blhc3`, submit a script directly:
 
 ```bash
-bh-env sbatch analysis.sh
+sbatch analysis.sh
 ```
 
 The generated submission wrapper copies every `#SBATCH` directive from
@@ -424,10 +436,13 @@ directory, then `/bin/bash analysis.sh` runs inside the current environment.
 Arguments are forwarded:
 
 ```bash
-bh-env sbatch analysis.sh subject-01 --overwrite
+sbatch analysis.sh subject-01 --overwrite
 ```
 
-Use `bh-env --env NAME sbatch ...` for another prepared environment.
+The container `sbatch` command maps scripts under its persistent home,
+`/bluehive-home`, `/gpfs`, `/scratch`, or `/host` back to the corresponding
+host path, then calls `bh-env --env NAME sbatch ...`. Use the explicit
+`bh-env --env NAME sbatch ...` proxy for another prepared environment.
 
 #### Checkpoint, restore, and rebuild
 
@@ -448,20 +463,21 @@ bh-env rebuild
 bh-env status
 ```
 
-`restore` and `rebuild` switch the `current` symlink atomically. New `bh-env`
-shells and batch jobs use the new generation immediately. Restart the VNC job
-when its desktop should move to that generation. Old generations remain in the
-private environment directory for manual recovery.
+`restore` and `rebuild` switch the `current` symlink atomically. Proxied
+`bh-env` shells and new batch jobs use the new generation immediately. Restart
+the VNC job to move its long-running container sshd, desktop, and services to
+that generation. Old generations remain in the private environment directory
+for manual recovery.
 
 Check that the shell is in the expected Slurm job and can see host resources:
 
 ```bash
-ssh blhc3 'printf "job=%s node=%s\n" "$SLURM_JOB_ID" "$(hostname -s)"; cat /proc/self/cgroup; type module; test -d /gpfs/fs1; test -d /gpfs/fs2; test -d /scratch'
+ssh blhc3 'printf "job=%s node=%s env=%s\n" "$SLURM_JOB_ID" "$(hostname -s)" "$BH_ENV_NAME"; cat /proc/self/cgroup; command -v matlab; nvidia-smi -L'
+ssh blhc3 "bluehive-host-shell 'type module; cat /proc/self/cgroup'"
 ```
 
 OpenCodex and Codex app-server start automatically with every mutable VNC job.
-Check them through the Slurm-bound host shell, whose wrappers enter the running
-service instance:
+Check them directly from the container SSH shell:
 
 ```bash
 ssh blhc3 'ocx ready --json'
@@ -479,8 +495,9 @@ OpenCodex ports. `remote_vnc.sh` checks the dashboard over this tunnel before
 reporting startup success.
 
 The VNC desktop and service instance use the same sandbox and persistent HOME.
-The separate instance exists only so long-lived OpenCodex and app-server
-processes, later SSH commands, and Codex App all see the same PID namespace.
+The separate instance keeps the long-lived OpenCodex and app-server processes
+in one PID namespace. Direct container SSH sessions share their network and
+HOME, while host-side wrappers can still join the service instance.
 
 The first mutable launch copies the existing host configuration into that
 environment's private persistent home. This includes the current OpenCodex
@@ -547,10 +564,10 @@ Run any script with `--help` for its current defaults.
 
 - `user_password.txt` is ignored by Git and should use mode `0600`.
 - VNC listens on compute-node loopback and reaches the Mac through an SSH local forward.
-- The VNC job's external SSH service accepts the configured public key and disables password login.
+- The mutable VNC job's external SSH service runs inside the read-only Apptainer rootfs, accepts only the configured public key, and enables SFTP.
 - Each user's VNC state directory uses mode `0700`; the VNC password file uses mode `0600`.
 - SSH host keys are checked before the Mac stores the VNC connection state.
-- The script rejects a compute shell, OpenCodex proxy, or Codex app-server process outside the expected Slurm batch cgroup.
+- The script rejects a container SSH shell, host backchannel, OpenCodex proxy, or Codex app-server process outside the expected Slurm batch cgroup.
 - Shared and private SIF files are checked before execution.
 - Mutable environments and checkpoints remain under each user's mode `0700` directory.
 - Fakeroot applies only to the Apptainer sandbox and retains the user's host permissions.

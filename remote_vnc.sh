@@ -34,11 +34,11 @@ print_usage() {
     cat <<'EOF'
 Usage: remote_vnc.sh [options]
 
-Start or reuse an independent VNC Slurm job. A mutable job starts OpenCodex and
-Codex app-server in a job-scoped instance of its persistent Apptainer
-environment. The script also starts a public-key-only SSH service inside that
-allocation, updates the existing Mac SSH entry "blhc3", creates the VNC tunnel,
-and opens macOS Screen Sharing.
+Start or reuse an independent VNC Slurm job. A mutable job starts OpenCodex,
+Codex app-server, and a public-key-only SSH service inside its persistent
+Apptainer environment. The script updates the existing Mac SSH entry "blhc3",
+creates the VNC tunnel, and opens macOS Screen Sharing. Direct SSH opens Fish
+inside the container; bluehive-host-shell returns to the allocated host.
 
 The resource options match remote_sshd.sh. They apply when a new VNC job is
 submitted; an already-running VNC job is reused and its actual allocation is
@@ -183,7 +183,7 @@ if [[ -n "${requested_node}" ]]; then
         fail "invalid node name: ${requested_node}"
 fi
 
-for required_command in ssh scp ssh-keygen lsof nc curl awk sed mktemp launchctl plutil; do
+for required_command in ssh scp sftp ssh-keygen lsof nc curl awk sed mktemp launchctl plutil; do
     command -v "${required_command}" >/dev/null 2>&1 ||
         fail "required command is unavailable: ${required_command}"
 done
@@ -222,7 +222,7 @@ launch_agent_file="${launch_agent_directory}/${launch_agent_label}.plist"
 launch_agent_stdout="${HOME}/Library/Logs/remote-vnc-${cluster_name}.out.log"
 launch_agent_stderr="${HOME}/Library/Logs/remote-vnc-${cluster_name}.err.log"
 remote_requested_node="${requested_node:-__REMOTE_VNC_SCHEDULER__}"
-managed_launcher_comment="remote-vnc-managed-v8:${environment_name}:${environment_mode}"
+managed_launcher_comment="remote-vnc-managed-v9:${environment_name}:${environment_mode}"
 
 login_control_path="$(
     /usr/bin/ssh -G "${login_host_alias}" 2>/dev/null |
@@ -452,7 +452,7 @@ restart_existing_job="${16}"
 environment_name="${17}"
 environment_mode="${18}"
 environment_build_timeout_seconds="${19}"
-managed_launcher_version="8"
+managed_launcher_version="9"
 
 if [[ "${requested_node}" == "__REMOTE_VNC_SCHEDULER__" ]]; then
     requested_node=""
@@ -552,7 +552,7 @@ job_uses_managed_launcher() {
         tr ' ' '\n' <<< "${job_record}" |
             awk -F= '$1 == "Comment" { print $2; exit }'
     )"
-    [[ "${job_comment}" == remote-vnc-managed-v8:* ]]
+    [[ "${job_comment}" == remote-vnc-managed-v9:* ]]
 }
 
 managed_launcher_is_ready() {
@@ -896,7 +896,11 @@ remote_ssh_is_ready() {
     local connection_vnc_port
     local connection_opencodex_port
     local connection_ssh_port
+    local connection_ssh_target
+    local connection_environment_name
+    local connection_environment_generation
     local expected_opencodex_port
+    local expected_ssh_target
 
     connection_status="$(read_state_value "${remote_ssh_connection_file}" STATUS || true)"
     connection_job_id="$(read_state_value "${remote_ssh_connection_file}" JOB_ID || true)"
@@ -906,14 +910,33 @@ remote_ssh_is_ready() {
         read_state_value "${remote_ssh_connection_file}" OPENCODEX_PORT || true
     )"
     connection_ssh_port="$(read_state_value "${remote_ssh_connection_file}" SSH_PORT || true)"
+    connection_ssh_target="$(
+        read_state_value "${remote_ssh_connection_file}" SSH_TARGET || true
+    )"
+    connection_environment_name="$(
+        read_state_value "${remote_ssh_connection_file}" ENVIRONMENT_NAME || true
+    )"
+    connection_environment_generation="$(
+        read_state_value "${remote_ssh_connection_file}" \
+            ENVIRONMENT_GENERATION || true
+    )"
     expected_opencodex_port="$(
         read_state_value "${connection_file}" OPENCODEX_PORT || true
     )"
+    if [[ "${environment_mode}" == "mutable" ]]; then
+        expected_ssh_target="CONTAINER"
+    else
+        expected_ssh_target="HOST"
+    fi
 
     [[ "${connection_status}" == "READY" ]] &&
         [[ "${connection_job_id}" == "${job_id}" ]] &&
         [[ "${connection_node}" == "${vnc_node}" ]] &&
         [[ "${connection_vnc_port}" == "${vnc_port}" ]] &&
+        [[ "${connection_ssh_target}" == "${expected_ssh_target}" ]] &&
+        [[ "${connection_environment_name}" == "${environment_name}" ]] &&
+        [[ "${connection_environment_generation}" == \
+           "$(read_state_value "${connection_file}" ENVIRONMENT_GENERATION)" ]] &&
         [[ "${connection_ssh_port}" =~ ^[0-9]+$ ]] &&
         tcp_port_is_open "${vnc_node}" "${connection_ssh_port}" || return 1
 
@@ -943,6 +966,12 @@ printf '[remote-vnc] Managed SSH service is ready for Job %s.\n' \
     "${job_id}" >&2
 
 remote_ssh_port="$(read_state_value "${remote_ssh_connection_file}" SSH_PORT)"
+remote_ssh_target="$(
+    read_state_value "${remote_ssh_connection_file}" SSH_TARGET
+)"
+remote_sftp_status="$(
+    read_state_value "${remote_ssh_connection_file}" SFTP_STATUS
+)"
 host_key_public_file="$(
     read_state_value "${remote_ssh_connection_file}" HOST_KEY_PUBLIC_FILE
 )"
@@ -955,6 +984,20 @@ host_key_public_file="$(
     printf 'Unexpected host-key path: %s\n' "${host_key_public_file}" >&2
     exit 6
 }
+if [[ "${environment_mode}" == "mutable" ]]; then
+    [[ "${remote_ssh_target}" == "CONTAINER" &&
+       "${remote_sftp_status}" == "ENABLED" ]] || {
+        printf 'Mutable environment SSH did not enter the container: %s/%s\n' \
+            "${remote_ssh_target:-unset}" "${remote_sftp_status:-unset}" >&2
+        exit 6
+    }
+else
+    [[ "${remote_ssh_target}" == "HOST" ]] || {
+        printf 'Immutable environment SSH target is invalid: %s\n' \
+            "${remote_ssh_target:-unset}" >&2
+        exit 6
+    }
+fi
 
 active_environment_name="$(read_state_value "${connection_file}" ENVIRONMENT_NAME)"
 active_environment_mode="$(read_state_value "${connection_file}" ENVIRONMENT_MODE)"
@@ -991,7 +1034,7 @@ active_codex_app_server_process_id="$(
     exit 6
 }
 
-printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "${job_id}" "${vnc_node}" "${vnc_port}" "${remote_ssh_port}" \
     "${host_key_public_file}" "${actual_partition}" "${actual_cpu_count}" \
     "${actual_gpu_count}" "${actual_memory}" "${actual_time_limit}" \
@@ -1001,7 +1044,8 @@ printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "${active_opencodex_process_id}" "${active_opencodex_port}" \
     "${active_opencodex_migration_status}" \
     "${active_codex_app_server_status}" \
-    "${active_codex_app_server_process_id}"
+    "${active_codex_app_server_process_id}" \
+    "${remote_ssh_target}" "${remote_sftp_status}"
 REMOTE_START
 )" || fail "remote VNC startup failed"
 
@@ -1013,7 +1057,8 @@ IFS='|' read -r \
     active_container_instance_name active_container_instance_process_id \
     active_opencodex_status active_opencodex_process_id active_opencodex_port \
     active_opencodex_migration_status active_codex_app_server_status \
-    active_codex_app_server_process_id <<< "${ready_record}"
+    active_codex_app_server_process_id active_remote_ssh_target \
+    active_remote_sftp_status <<< "${ready_record}"
 [[ "${vnc_job_id}" =~ ^[0-9]+$ ]] || fail "invalid VNC Job ID: ${vnc_job_id}"
 [[ "${vnc_node}" =~ ^[A-Za-z0-9._-]+$ ]] || fail "invalid VNC node: ${vnc_node}"
 [[ "${remote_vnc_port}" =~ ^[0-9]+$ ]] || fail "invalid VNC port: ${remote_vnc_port}"
@@ -1023,11 +1068,18 @@ IFS='|' read -r \
 [[ "${active_environment_mode}" == "${environment_mode}" ]] ||
     fail "active environment mode does not match: ${active_environment_mode}"
 if [[ "${active_environment_mode}" == "mutable" ]]; then
+    [[ "${active_remote_ssh_target}" == "CONTAINER" ]] ||
+        fail "mutable environment SSH target is not the container"
+    [[ "${active_remote_sftp_status}" == "ENABLED" ]] ||
+        fail "mutable environment SFTP is unavailable"
     [[ "${active_container_instance_name}" =~ \
        ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
         fail "invalid container service instance: ${active_container_instance_name}"
     [[ "${active_container_instance_process_id}" =~ ^[0-9]+$ ]] ||
         fail "invalid container service instance PID: ${active_container_instance_process_id}"
+else
+    [[ "${active_remote_ssh_target}" == "HOST" ]] ||
+        fail "immutable environment SSH target is not the host"
 fi
 
 server_host_key="$(
@@ -1396,9 +1448,13 @@ validation_record="$(
         -o BatchMode=yes \
         -o ConnectTimeout=15 \
         "${vnc_ssh_alias}" \
-        /bin/bash -s -- "${REMOTE_SHARED_ROOT}" <<'REMOTE_VALIDATE'
+        /bin/bash -s -- \
+        "${REMOTE_SHARED_ROOT}" "${active_environment_name}" \
+        "${active_environment_mode}" <<'REMOTE_VALIDATE'
 set -Eeuo pipefail
 remote_shared_root="$1"
+environment_name="$2"
+environment_mode="$3"
 printf 'JOB_ID=%s\n' "${SLURM_JOB_ID:-}"
 printf 'NODE=%s\n' "$(hostname -s)"
 printf 'CPUS=%s\n' "${SLURM_CPUS_PER_TASK:-}"
@@ -1407,10 +1463,45 @@ printf 'CGROUP='
 tr '\n' ';' < "/proc/$$/cgroup"
 printf '\n'
 [[ -d "${remote_shared_root}" ]] && printf 'DATA=available\n'
-[[ -x /gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/bin/matlab ]] &&
-    printf 'MATLAB=available\n'
-type module >/dev/null 2>&1 && printf 'MODULE=available\n'
-true
+
+if [[ "${environment_mode}" == "mutable" ]]; then
+    printf 'SSH_TARGET=CONTAINER\n'
+    printf 'ENVIRONMENT=%s\n' "${BH_ENV_NAME:-}"
+    printf 'HOME=%s\n' "${HOME}"
+    [[ "${BH_ENV_ACTIVE:-}" == "1" ]]
+    [[ "${BH_ENV_NAME:-}" == "${environment_name}" ]]
+    [[ "${HOME}" == "/home/$(id -un)" ]]
+    for command_name in \
+        fish gcc g++ node npm ocx codex uv pixi nvcc \
+        google-chrome-stable chatgpt matlab mpm vncserver sshd \
+        bh-env bh-admin sbatch bluehive-host-shell; do
+        command -v "${command_name}" >/dev/null
+    done
+    test -x /opt/matlab/R2025b/bin/matlab
+    test -x /usr/lib/openssh/sftp-server
+    test -d /gpfs/fs1
+    test -d /gpfs/fs2
+    test -d /scratch
+    test -d /bluehive-home
+    test -d /host
+    printf 'SOFTWARE=available\n'
+
+    host_record="$(
+        bluehive-host-shell \
+            'printf "job=%s node=%s cgroup=" "${SLURM_JOB_ID:-}" "$(hostname -s)"; tr "\n" ";" < /proc/self/cgroup; printf " module=%s data=%s\n" "$(type -t module || true)" "$(test -d /gpfs/fs2 && printf yes || printf no)"' \
+            </dev/null
+    )"
+    printf 'HOST_RECORD=%s\n' "${host_record}"
+    bh-env --env "${environment_name}" status >/dev/null </dev/null
+    printf 'BH_ENV_PROXY=available\n'
+    admin_user_id="$(bh-admin -- id -u </dev/null)"
+    printf 'ADMIN_UID=%s\n' "${admin_user_id}"
+else
+    printf 'SSH_TARGET=HOST\n'
+    [[ -x /gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/bin/matlab ]] &&
+        printf 'MATLAB=available\n'
+    type module >/dev/null 2>&1 && printf 'MODULE=available\n'
+fi
 REMOTE_VALIDATE
 )" || fail "direct SSH into the VNC allocation failed"
 
@@ -1427,47 +1518,68 @@ grep -q '^DATA=available$' <<< "${validation_record}" ||
     fail "the SSH shell cannot access ${REMOTE_SHARED_ROOT}"
 
 if [[ "${active_environment_mode}" == "mutable" ]]; then
-    environment_validation_record="$(
+    grep -q '^SSH_TARGET=CONTAINER$' <<< "${validation_record}" ||
+        fail "SSH did not enter the mutable Apptainer environment"
+    grep -q "^ENVIRONMENT=${active_environment_name}$" \
+        <<< "${validation_record}" ||
+        fail "SSH entered the wrong mutable environment"
+    grep -q "^HOME=/home/${remote_user_name}$" <<< "${validation_record}" ||
+        fail "the container SSH home is incorrect"
+    grep -q '^SOFTWARE=available$' <<< "${validation_record}" ||
+        fail "the container SSH shell is missing required software or mounts"
+    grep -q '^BH_ENV_PROXY=available$' <<< "${validation_record}" ||
+        fail "the container bh-env host proxy failed"
+    grep -q '^ADMIN_UID=0$' <<< "${validation_record}" ||
+        fail "the short-lived bh-admin fakeroot command failed"
+    expected_host_record_pattern="^HOST_RECORD=job=${vnc_job_id}"
+    expected_host_record_pattern+=" node=${vnc_node} cgroup=.*"
+    expected_host_record_pattern+="/job_${vnc_job_id}/step_batch/.*"
+    expected_host_record_pattern+=" module=function data=yes$"
+    grep -Eq "${expected_host_record_pattern}" <<< "${validation_record}" ||
+        fail "the container cannot return to the Slurm-bound host shell"
+
+    if ! pty_validation_record="$(
         /usr/bin/ssh \
+            -tt \
             -o BatchMode=yes \
             -o ConnectTimeout=15 \
             "${vnc_ssh_alias}" \
-            /bin/bash -s -- "${active_environment_name}" <<'REMOTE_ENVIRONMENT_VALIDATE'
-set -Eeuo pipefail
-environment_name="$1"
-bh_env_executable="${HOME}/.local/bin/bh-env"
-[[ -x "${bh_env_executable}" ]]
-"${bh_env_executable}" --env "${environment_name}" exec -- \
-    /bin/bash -c '
-        set -Eeuo pipefail
-        for command_name in fish gcc g++ node npm ocx codex uv pixi nvcc \
-            google-chrome-stable \
-            chatgpt matlab mpm vncserver; do
-            command -v "${command_name}" >/dev/null
-        done
-        test -x /opt/matlab/R2025b/bin/matlab
-        test -d /gpfs/fs1
-        test -d /gpfs/fs2
-        test -d /scratch
-        test -d /bluehive-home
-        printf "ENVIRONMENT_OK user=%s job=%s\n" \
-            "$(id -un)" "${SLURM_JOB_ID:-missing}"
-        printf "CGROUP="
-        tr "\n" ";" < /proc/self/cgroup
-        printf "\n"
-    '
-REMOTE_ENVIRONMENT_VALIDATE
-    )" || fail "the mutable Apptainer environment failed validation"
-    grep -q "^ENVIRONMENT_OK user=${remote_user_name} job=${vnc_job_id}$" \
-        <<< "${environment_validation_record}" ||
-        fail "the mutable environment returned an invalid identity"
-    environment_validation_cgroup="$(
-        awk -F= '$1 == "CGROUP" { sub(/^[^=]*=/, ""); print; exit }' \
-            <<< "${environment_validation_record}"
-    )"
-    [[ "${environment_validation_cgroup}" == \
-       *"/job_${vnc_job_id}/step_batch/"* ]] ||
-        fail "the mutable environment is outside the VNC batch Step cgroup"
+            'printf "TTY=%s\n" "$(tty)"' 2>&1 |
+            tr -d '\r'
+    )"; then
+        printf '%s\n' "${pty_validation_record}" >&2
+        fail "the mutable Apptainer SSH service could not allocate a PTY"
+    fi
+    grep -Eq '^TTY=/dev/pts/[0-9]+$' <<< "${pty_validation_record}" || {
+        printf '%s\n' "${pty_validation_record}" >&2
+        fail "the mutable Apptainer SSH service returned an invalid PTY"
+    }
+
+    sftp_batch_file="$(mktemp /tmp/remote-vnc-sftp.XXXXXX)"
+    printf 'pwd\nquit\n' > "${sftp_batch_file}"
+    if ! sftp_validation_record="$(
+        /usr/bin/sftp \
+            -q -b "${sftp_batch_file}" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=${known_hosts_file}" \
+            -o "HostKeyAlias=${vnc_host_key_alias}" \
+            -o "IdentityFile=${identity_file}" \
+            -o IdentitiesOnly=yes \
+            "${vnc_ssh_alias}" 2>&1
+    )"; then
+        unlink "${sftp_batch_file}"
+        printf '%s\n' "${sftp_validation_record}" >&2
+        fail "SFTP into the mutable Apptainer environment failed"
+    fi
+    unlink "${sftp_batch_file}"
+    grep -Fq "Remote working directory: /home/${remote_user_name}" \
+        <<< "${sftp_validation_record}" ||
+        fail "SFTP entered an unexpected container directory"
+else
+    grep -q '^SSH_TARGET=HOST$' <<< "${validation_record}" ||
+        fail "SSH did not enter the immutable allocation host"
 fi
 
 local_state_temporary_file="$(mktemp "${local_connection_state_file}.XXXXXX")"
@@ -1475,6 +1587,8 @@ local_state_temporary_file="$(mktemp "${local_connection_state_file}.XXXXXX")"
     printf 'JOB_ID=%s\n' "${vnc_job_id}"
     printf 'NODE=%s\n' "${vnc_node}"
     printf 'REMOTE_SSH_PORT=%s\n' "${remote_ssh_port}"
+    printf 'REMOTE_SSH_TARGET=%s\n' "${active_remote_ssh_target}"
+    printf 'REMOTE_SFTP_STATUS=%s\n' "${active_remote_sftp_status}"
     printf 'REMOTE_VNC_PORT=%s\n' "${remote_vnc_port}"
     printf 'LOCAL_VNC_PORT=%s\n' "${local_vnc_port}"
     printf 'LOCAL_OPENCODEX_PORT=%s\n' "${local_opencodex_port}"
@@ -1505,10 +1619,11 @@ log_message \
     "Job ${vnc_job_id}: node=${vnc_node} partition=${actual_partition}" \
     "CPUs=${actual_cpu_count} GPUs=${actual_gpu_count}" \
     "memory=${actual_memory} time=${actual_time_limit}"
-log_message "Compute shell: ssh ${vnc_ssh_alias}"
 if [[ "${active_environment_mode}" == "mutable" ]]; then
-    log_message \
-        "Environment shell: ssh ${vnc_ssh_alias} -t bh-env --env ${active_environment_name} shell"
+    log_message "Environment shell: ssh ${vnc_ssh_alias}"
+    log_message "Host shell from the container: bluehive-host-shell"
+    log_message "Writable admin command: bh-admin"
+    log_message "Container batch submission: sbatch SCRIPT [ARG ...]"
     log_message \
         "Environment=${active_environment_name} generation=${active_environment_generation}"
     log_message \
@@ -1523,6 +1638,8 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
         "PID=${active_codex_app_server_process_id}"
     log_message \
         "OpenCodex dashboard: http://127.0.0.1:${local_opencodex_port}"
+else
+    log_message "Compute shell: ssh ${vnc_ssh_alias}"
 fi
 log_message "VNC address: ${vnc_url}"
 log_message \

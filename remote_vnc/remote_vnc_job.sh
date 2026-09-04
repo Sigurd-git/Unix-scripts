@@ -14,7 +14,7 @@ environment_name="${8:-default}"
 environment_mode="${9:-mutable}"
 environment_build_timeout_seconds="${10:-10800}"
 
-launcher_version="8"
+launcher_version="9"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${job_id}"
@@ -313,11 +313,19 @@ if [[ "${environment_mode}" == "mutable" ]]; then
 else
     opencodex_port=""
 fi
+if [[ "${environment_mode}" == "mutable" ]]; then
+    expected_ssh_target="CONTAINER"
+else
+    expected_ssh_target="HOST"
+fi
 write_launcher_state "STARTING_SSH"
 
 "${remote_sshd_helper}" \
     "${user_service_directory}" "${job_id}" "${vnc_node}" "${vnc_port}" \
-    "${authorized_keys_file}" "${opencodex_port}" &
+    "${authorized_keys_file}" "${opencodex_port}" \
+    "${release_directory}" "${runtime_image_path}" "${environment_home}" \
+    "${environment_name}" "${environment_mode}" \
+    "${environment_generation}" &
 remote_ssh_launcher_process_id=$!
 write_launcher_state "STARTING_SSH"
 
@@ -340,6 +348,9 @@ for ((attempt_number = 1; attempt_number <= 60; attempt_number++)); do
        [[ "$(read_state_value "${remote_ssh_connection_file}" NODE || true)" == "${vnc_node}" ]] &&
        [[ "$(read_state_value "${remote_ssh_connection_file}" VNC_PORT || true)" == "${vnc_port}" ]] &&
        [[ "$(read_state_value "${remote_ssh_connection_file}" OPENCODEX_PORT || true)" == "${opencodex_port}" ]] &&
+       [[ "$(read_state_value "${remote_ssh_connection_file}" SSH_TARGET || true)" == "${expected_ssh_target}" ]] &&
+       [[ "$(read_state_value "${remote_ssh_connection_file}" ENVIRONMENT_NAME || true)" == "${environment_name}" ]] &&
+       [[ "$(read_state_value "${remote_ssh_connection_file}" ENVIRONMENT_GENERATION || true)" == "${environment_generation}" ]] &&
        [[ "$(read_state_value "${remote_ssh_connection_file}" SSH_PORT || true)" =~ ^[0-9]+$ ]]; then
         remote_ssh_ready=true
         break
@@ -352,10 +363,11 @@ done
 }
 
 write_launcher_state "READY"
-printf 'REMOTE_VNC_JOB_READY job=%s node=%s vnc_port=%s opencodex_port=%s ssh_port=%s\n' \
+printf 'REMOTE_VNC_JOB_READY job=%s node=%s vnc_port=%s opencodex_port=%s ssh_port=%s ssh_target=%s\n' \
     "${job_id}" "${vnc_node}" "${vnc_port}" \
     "${opencodex_port:-disabled}" \
-    "$(read_state_value "${remote_ssh_connection_file}" SSH_PORT)"
+    "$(read_state_value "${remote_ssh_connection_file}" SSH_PORT)" \
+    "${expected_ssh_target}"
 
 while kill -0 "${vnc_launcher_process_id}" 2>/dev/null &&
       kill -0 "${remote_ssh_launcher_process_id}" 2>/dev/null; do

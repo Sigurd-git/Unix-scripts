@@ -163,6 +163,10 @@ run_in_environment() {
     bh_env_append_runtime_options \
         apptainer_options "${persistent_home}" "${runtime_root}" \
         "${DISPLAY:-}" "${access_mode}"
+    apptainer_options+=(
+        --env "BH_ENV_NAME=${environment_name}"
+        --env "BH_ENV_GENERATION=$(basename "${generation_directory}")"
+    )
     append_working_directory apptainer_options
     exec apptainer "${apptainer_options[@]}" "${rootfs_path}" "$@"
 }
@@ -422,13 +426,8 @@ submit_batch_script() {
     mapped_script_path="$(bh_env_map_host_path "${source_script_path}" "${HOME}")"
     read_current_generation >/dev/null
 
-    if command -v sbatch >/dev/null 2>&1; then
-        sbatch_executable="$(command -v sbatch)"
-    elif [[ -x /sfw/rhel9-x86_64/slurm/24.05.0.b1/bin/sbatch ]]; then
-        sbatch_executable=/sfw/rhel9-x86_64/slurm/24.05.0.b1/bin/sbatch
-    else
+    sbatch_executable="$(bh_env_find_slurm_executable sbatch)" ||
         fail "sbatch is unavailable"
-    fi
 
     wrapper_directory="${BH_ENV_USER_SERVICE_DIRECTORY}/state/sbatch"
     mkdir -p "${wrapper_directory}"

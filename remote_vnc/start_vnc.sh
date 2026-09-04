@@ -52,6 +52,8 @@ codex_app_server_process_id=""
 container_instance_name=""
 container_instance_process_id=""
 opencodex_startup_timeout_seconds=120
+slurm_binary_directory=""
+host_path_prefix=""
 
 for required_file in \
     "${image_path}" "${matlab_vnc_launcher}" "${environment_common_helpers}" \
@@ -81,6 +83,12 @@ bh_env_validate_name "${environment_name}" || {
     printf 'Invalid environment mode: %s\n' "${environment_mode}" >&2
     exit 2
 }
+slurm_sbatch_executable="$(bh_env_find_slurm_executable sbatch)" || {
+    printf 'Slurm commands are unavailable in the VNC allocation.\n' >&2
+    exit 2
+}
+slurm_binary_directory="$(dirname "${slurm_sbatch_executable}")"
+host_path_prefix="${session_home}/.local/bin:${slurm_binary_directory}"
 
 write_status() {
     local status_value="$1"
@@ -317,7 +325,11 @@ container_options=()
 bh_env_append_runtime_options \
     container_options "${session_home}" "${runtime_directory}/runtime" \
     "${display_value}" normal
-container_options+=(--env "XAUTHORITY=${container_home}/.Xauthority")
+container_options+=(
+    --env "BH_ENV_NAME=${environment_name}"
+    --env "BH_ENV_GENERATION=${environment_generation}"
+    --env "XAUTHORITY=${container_home}/.Xauthority"
+)
 
 matlab_warmup_available=false
 matlab_warmup_command=(ionice -c 3 nice -n 10)
@@ -404,7 +416,7 @@ chmod 600 "${host_shell_known_hosts}"
     printf 'export BH_ENV_NAME=%q\n' "${environment_name}"
     printf 'export CODEX_HOME=%q\n' "${session_home}/.codex"
     printf 'export PATH=%q:"${HOME}/.local/bin:${PATH}"\n' \
-        "${session_home}/.local/bin"
+        "${host_path_prefix}"
     printf 'matlab-vnc() { %q %q "$@"; }\n' \
         "${matlab_vnc_launcher}" "${matlab_vnc_target}"
     printf 'export -f matlab-vnc\n'
@@ -422,7 +434,7 @@ chmod 600 "${host_shell_known_hosts}"
     printf 'if [[ -n "${SSH_ORIGINAL_COMMAND:-}" ]]; then\n'
     printf '    exec /bin/bash -c %q -- "${SSH_ORIGINAL_COMMAND}" %q %q\n' \
         'source /etc/profile 2>/dev/null || true; export PATH="$2:${HOME}/.local/bin:${PATH}"; export CODEX_HOME="$3"; eval "$1"' \
-        "${session_home}/.local/bin" "${session_home}/.codex"
+        "${host_path_prefix}" "${session_home}/.codex"
     printf 'fi\n'
     printf 'exec /bin/bash --rcfile %q -i\n' "${host_shell_rc_file}"
 } > "${host_shell_entry_script}"
@@ -437,7 +449,7 @@ chmod 700 "${host_shell_entry_script}"
     printf 'export BH_ENV_NAME=%q\n' "${environment_name}"
     printf 'export CODEX_HOME=%q\n' "${session_home}/.codex"
     printf 'export PATH=%q:"${HOME}/.local/bin:${PATH}"\n' \
-        "${session_home}/.local/bin"
+        "${host_path_prefix}"
     printf 'matlab-vnc() { %q %q "$@"; }\n' \
         "${matlab_vnc_launcher}" "${matlab_vnc_target}"
     for slurm_variable_name in \
@@ -458,9 +470,13 @@ chmod 600 "${host_shell_rc_file}"
 {
     printf '#!/usr/bin/env bash\n'
     printf 'set -Eeuo pipefail\n'
+    printf 'ssh_tty_option=-T\n'
+    printf 'if [[ -t 0 && -t 1 ]]; then\n'
+    printf '    ssh_tty_option=-tt\n'
+    printf 'fi\n'
     printf 'exec /host/lib64/ld-linux-x86-64.so.2 \\\n'
     printf '    --library-path /host/lib64:/host/usr/lib64 \\\n'
-    printf '    /host/usr/bin/ssh -tt \\\n'
+    printf '    /host/usr/bin/ssh "${ssh_tty_option}" \\\n'
     printf '    -i %q \\\n' "${container_home}/.ssh/bluehive-host-shell"
     printf '    -p %q \\\n' "${host_shell_port}"
     printf '    -o BatchMode=yes \\\n'
