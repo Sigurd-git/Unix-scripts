@@ -207,15 +207,19 @@ Start with the defaults (16 CPUs, 1 GPU, 256 GiB, 24 hours):
 After the SSH and VNC checks pass, the script opens TigerVNC in full screen
 when it is installed under `/Applications`; otherwise it uses macOS Screen
 Sharing. Full screen lets TigerVNC forward the Mac Command key to the remote
-desktop automatically. Keep the job and tunnel running without opening a
-viewer with:
+desktop automatically. The viewer asks the server to match the current monitor
+instead of scaling a larger framebuffer and uses lossless full-color Tight
+encoding for sharp text and interface elements. Keep the job and tunnel running
+without opening a viewer with:
 
 ```bash
 ./remote_vnc.sh --no-open
 ```
 
-The default framebuffer is `2560x1440`. Select another size when submitting a
-new job, for example:
+The initial framebuffer is `2560x1440`. TigerVNC dynamically changes it to the
+current full-screen viewport after authentication. `--geometry` controls the
+initial size and remains the fallback for clients without remote-resize
+support. Select another fallback when submitting a new job, for example:
 
 ```bash
 ./remote_vnc.sh --geometry 2880x1800 --restart
@@ -249,10 +253,12 @@ with:
 remote-vnc-desktop-profile apply --force
 ```
 
-TigerVNC maps the Mac Command key to X11 Super. The desktop profile adds an
-application-aware bridge for the common macOS shortcuts. In Chrome, ChatGPT,
-MATLAB, Thunar, and other GUI applications, Command+C/V/A/X/Z/Shift+Z/F/S/O/N/T/W/R/L/P
-invoke the corresponding Linux Control shortcut. In XFCE Terminal,
+TigerVNC normally maps the left Mac Command key to X11 Alt and the right Command
+key to Super. The VNC server normalizes the incoming left Command key to Super,
+then the desktop profile adds an application-aware bridge for common macOS
+shortcuts. In Chrome, ChatGPT, MATLAB, Thunar, and other GUI applications,
+Command+C/V/A/X/Z/Shift+Z/F/S/O/N/T/W/R/L/P invoke the corresponding Linux
+Control shortcut. In XFCE Terminal,
 Command+C/V/A/F/N/T/W instead invoke Control+Shift+C/V/A/F/N/T/W. Actions such
 as Command+Z and Command+S stay inactive in terminals so they cannot suspend a
 foreground process or enable terminal flow control.
@@ -272,10 +278,11 @@ TigerVNC uses RFB 3.8 with `VncAuth` and listens only on compute-node loopback.
 The script forwards it through the existing public-key SSH connection.
 TigerVNC is the recommended Mac client because its text clipboard works with
 this Linux server and it forwards Command as Super. The launcher enables both
-clipboard directions, starts the viewer executable with checked macOS client
-options, keeps the requested remote geometry instead of resizing it to the
-viewer window, and never reads the saved VNC password. File and image clipboard
-formats are outside the standard VNC text clipboard protocol.
+clipboard directions, fits the remote framebuffer to the current monitor, uses
+lossless full-color encoding, and never reads the saved VNC password. Lossless
+mode consumes more bandwidth than JPEG mode but avoids compression blur. File
+and image clipboard formats are outside the standard VNC text clipboard
+protocol.
 
 #### Remote root and file layout
 
@@ -625,7 +632,8 @@ The Slurm launch scripts share these resource options:
 `remote_vnc.sh` also accepts:
 
 - `--env NAME`: select or create a persistent environment; default `default`
-- `--geometry WIDTHxHEIGHT`: set the VNC framebuffer; default `2560x1440`
+- `--geometry WIDTHxHEIGHT`: set the initial/fallback VNC framebuffer; default
+  `2560x1440`; TigerVNC dynamically matches its full-screen viewport
 - `--immutable`: run the original read-only image without preparing a sandbox
 - `--restart`: replace the current VNC job
 - `--no-open`: do not open a VNC viewer

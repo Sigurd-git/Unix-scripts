@@ -55,7 +55,7 @@ Options:
   -w, --node NODE            Request a specific compute node
   -r, --root PATH            Override REMOTE_SHARED_ROOT
   --env NAME                 Persistent environment name (default: default)
-  --geometry WIDTHxHEIGHT    VNC framebuffer size (default: 2560x1440)
+  --geometry WIDTHxHEIGHT    Initial/fallback VNC size (default: 2560x1440)
   --immutable                Run the original read-only VNC image
   --restart     Replace the current VNC job with a newly managed job
   --no-open     Prepare SSH and VNC without opening a VNC viewer
@@ -298,7 +298,7 @@ configured_remote_ssh_port="${REMOTE_VNC_SSH_PORT}"
 [[ "${configured_remote_ssh_port}" =~ ^[0-9]+$ ]] &&
     ((configured_remote_ssh_port >= 44000 && configured_remote_ssh_port <= 44999)) ||
     fail "line 4 of ${USER_PASSWORD_FILE} must be a port from 44000 to 44999"
-managed_launcher_comment="remote-vnc-managed-v12:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
+managed_launcher_comment="remote-vnc-managed-v13:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
 
 CLUSTER="${cluster_name}"
 HOSTNAME="$(cluster_hostname "${cluster_name}")" || exit 1
@@ -591,7 +591,7 @@ environment_mode="${18}"
 environment_build_timeout_seconds="${19}"
 requested_remote_ssh_port="${20}"
 vnc_geometry="${21}"
-managed_launcher_version="12"
+managed_launcher_version="13"
 
 if [[ "${requested_node}" == "__REMOTE_VNC_SCHEDULER__" ]]; then
     requested_node=""
@@ -713,7 +713,7 @@ job_uses_managed_launcher() {
         tr ' ' '\n' <<< "${job_record}" |
             awk -F= '$1 == "Comment" { print $2; exit }'
     )"
-    [[ "${job_comment}" == remote-vnc-managed-v12:* ]]
+    [[ "${job_comment}" == remote-vnc-managed-v13:* ]]
 }
 
 managed_launcher_is_ready() {
@@ -1844,7 +1844,7 @@ else
     log_message "Compute shell: ssh ${vnc_ssh_alias}"
 fi
 log_message "VNC address: ${vnc_url}"
-log_message "VNC geometry: ${active_vnc_geometry}"
+log_message "Initial/fallback VNC geometry: ${active_vnc_geometry}"
 log_message "Text clipboard: enabled."
 log_message \
     "macOS application shortcuts: ${active_macos_shortcuts_status:-UNAVAILABLE}"
@@ -1859,15 +1859,22 @@ if [[ "${open_vnc_viewer}" == "true" ]]; then
         log_message \
             "Opening TigerVNC in full screen; enter the VNC password manually."
         log_message \
+            "The desktop will match this monitor and use lossless full-color encoding."
+        log_message \
             "macOS system shortcuts are captured automatically;" \
             "Control+Option releases them and Control+Option+G recaptures them."
         open -na "${tiger_vnc_application}" --args \
             -AcceptClipboard=1 \
+            -AutoSelect=0 \
+            -FullColor=1 \
             -FullScreen=1 \
+            -FullScreenMode=Current \
             -FullscreenSystemKeys=1 \
+            -NoJPEG=1 \
+            -PreferredEncoding=Tight \
             -SendClipboard=1 \
             -MaxCutText=1048576 \
-            -RemoteResize=0 \
+            -RemoteResize=1 \
             -SecurityTypes=VncAuth \
             -Shared=1 \
             -ShortcutModifiers=Ctrl,Alt \

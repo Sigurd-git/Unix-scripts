@@ -57,11 +57,16 @@ job-specific `/etc/group` view omits the unmapped `tty` group, allowing the
 non-root OpenSSH monitor to assign container PTYs to the user's mapped primary
 group.
 
-The VNC launcher defaults to `2560x1440`, accepts a validated geometry from the
-Mac launcher, and records it in both job and connection state. It explicitly
-checks TigerVNC's bidirectional text clipboard, desktop-resize, and blacklist
-parameters after startup. RFB remains loopback-only with `VncAuth`, so macOS
-Screen Sharing reaches it through the managed SSH tunnel.
+The VNC launcher defaults to an initial `2560x1440`, accepts a validated
+geometry from the Mac launcher, and records it in both job and connection
+state. The macOS TigerVNC launcher requests the current full-screen viewport
+through remote resize and disables JPEG so text remains lossless instead of
+scaling a larger, lossy framebuffer. The server remaps incoming `Alt_L` to
+`Super_L` because TigerVNC sends the Mac left Command key as `Alt_L`; the right
+Command key already arrives as `Super_L`. It explicitly checks the clipboard,
+desktop-resize, key-remap, and blacklist parameters after startup. RFB remains
+loopback-only with `VncAuth`, so macOS Screen Sharing reaches it through the
+managed SSH tunnel.
 
 `configure_desktop.sh` owns the persistent XFCE profile and registers Super-key
 application shortcuts. `macos_shortcut.sh` uses the focused window class to

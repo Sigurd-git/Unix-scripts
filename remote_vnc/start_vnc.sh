@@ -461,6 +461,11 @@ chmod 600 "${vnc_password_file}"
     printf 'setprimary=1\n'
     printf 'maxcuttext=1048576\n'
     printf 'acceptsetdesktopsize=1\n'
+    # TigerVNC intentionally sends the Mac left Command key as Alt_L and the
+    # right Command key as Super_L. Normalize both to Super_L before X11 sees
+    # them so application shortcuts behave identically and Alt+V cannot open
+    # the terminal's View menu.
+    printf 'remapkeys=0xffe9->0xffeb\n'
     printf 'useblacklist=1\n'
 } > "${vnc_config_file}"
 chmod 600 "${vnc_config_file}"
@@ -880,6 +885,7 @@ for vnc_parameter_expectation in \
     SetPrimary=1 \
     MaxCutText=1048576 \
     AcceptSetDesktopSize=1 \
+    'RemapKeys=0xffe9->0xffeb' \
     UseBlacklist=1; do
     vnc_parameter_name="${vnc_parameter_expectation%%=*}"
     expected_vnc_parameter_value="${vnc_parameter_expectation#*=}"
@@ -1022,6 +1028,7 @@ connection_temporary_file="${connection_file}.tmp.${job_id}"
     printf 'VNC_PORT=%s\n' "${vnc_port}"
     printf 'VNC_GEOMETRY=%s\n' "${vnc_geometry}"
     printf 'VNC_CLIPBOARD=ENABLED\n'
+    printf 'VNC_MACOS_COMMAND_REMAP=ALT_L_TO_SUPER_L\n'
     printf 'VNC_SCREEN_SHARING_COMPATIBILITY=RFB_3_8_VNC_AUTH\n'
     printf 'VNC_PASSWORD_FILE=%s\n' "${plain_password_file}"
     printf 'VNC_LOG=%s\n' "${vnc_log_file}"
