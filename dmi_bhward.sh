@@ -45,4 +45,6 @@ if [ -z "$1" ]
 then
     set -- 32 12 32000
 fi
-ssh "$CLUSTER" "screen -dmS dmi salloc -N 1 -n $1 -p dmi -t $2:00:00 --mem $3"
+ssh -F /dev/null -o "ControlPath=$SSH_CONTROL_PATH" \
+    "$SSH_LOGIN_TARGET" \
+    "screen -dmS dmi salloc -N 1 -n $1 -p dmi -t $2:00:00 --mem $3"

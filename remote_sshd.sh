@@ -128,7 +128,9 @@ source "$current_path/remote_tools.sh"
 ensure_remote_dropbear || exit $?
 DROPBEAR_DIR="$REMOTE_SHARED_ROOT/dropbear"
 
-ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $USER@$HOSTNAME <<ENDSSH
+ssh -F /dev/null -o ControlMaster=auto \
+    -o "ControlPath=$SSH_CONTROL_PATH" -o StrictHostKeyChecking=no \
+    -T "$SSH_LOGIN_TARGET" <<ENDSSH
 #!/bin/bash
 module load gcc 2>/dev/null || true
 mkdir -p /home/$USER/logs
@@ -148,8 +150,6 @@ else
 #SBATCH --gres=gpu:$GPUS
 #SBATCH -o /home/$USER/logs/dropbear.log
 #SBATCH --job-name=my_sshd
-#SBATCH --mail-type=BEGIN
-#SBATCH --mail-user=guoyang_liao@urmc.rochester.edu
 
 cd "$DROPBEAR_DIR"
 
@@ -195,7 +195,9 @@ fi
 ENDSSH
 
 # SSH into cluster and check for port in a loop
-PORT=$(ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $USER@$HOSTNAME <<ENDSSH2
+PORT=$(ssh -F /dev/null -o ControlMaster=auto \
+    -o "ControlPath=$SSH_CONTROL_PATH" -o StrictHostKeyChecking=no \
+    -T "$SSH_LOGIN_TARGET" <<ENDSSH2
 while true; do
     # Get SSH port from the job if it's running
     PORT_INFO=\$(grep 'Using port:' /home/$USER/logs/dropbear.log 2>/dev/null | tail -1)
@@ -210,7 +212,9 @@ while true; do
 done
 ENDSSH2
 )
-NODE=$(ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no -T $USER@$HOSTNAME <<ENDSSH2
+NODE=$(ssh -F /dev/null -o ControlMaster=auto \
+    -o "ControlPath=$SSH_CONTROL_PATH" -o StrictHostKeyChecking=no \
+    -T "$SSH_LOGIN_TARGET" <<ENDSSH2
 echo "Waiting for port allocation..." > /home/$USER/logs/dropbear_test.log
 while true; do
     # Get SSH port from the job if it's running
@@ -229,4 +233,20 @@ ENDSSH2
 
 echo "Detected port: $PORT"
 echo "Detected node: $NODE"
-$current_path/update_ssh_config.sh -a $CLUSTER -p $PARTITION -o $PORT -w $NODE
+
+remote_sshd_state_directory="${XDG_STATE_HOME:-${HOME}/.local/state}/unix-scripts"
+remote_sshd_state_file="${remote_sshd_state_directory}/remote_sshd_${CLUSTER}.env"
+mkdir -p "${remote_sshd_state_directory}"
+chmod 700 "${remote_sshd_state_directory}"
+remote_sshd_state_temporary_file="$(mktemp "${remote_sshd_state_file}.XXXXXX")"
+{
+    printf 'CLUSTER=%s\n' "$CLUSTER"
+    printf 'REMOTE_USER=%s\n' "$REMOTE_USER"
+    printf 'NODE=%s\n' "$NODE"
+    printf 'PORT=%s\n' "$PORT"
+} > "${remote_sshd_state_temporary_file}"
+chmod 600 "${remote_sshd_state_temporary_file}"
+mv "${remote_sshd_state_temporary_file}" "${remote_sshd_state_file}"
+
+echo "Saved connection state: ${remote_sshd_state_file}"
+echo "Connect with: $(cluster_shortcut "$CLUSTER") --service sshd"

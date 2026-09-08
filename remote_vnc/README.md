@@ -53,12 +53,12 @@ opening repeated RPC connections. A busy daemon can time out an RPC status
 query while its process is still running. A missing process gets 60 seconds to
 return during a restart before the launcher treats it as a service failure.
 For mutable environments, `remote_vnc_job_sshd.sh` starts the public SSH server
-inside the read-only sandbox. `ssh blhc3` therefore opens Fish directly in the
+inside the read-only sandbox. `blhc3` therefore opens Fish directly in the
 container, while SFTP, VNC forwarding, and OpenCodex forwarding use the same
 Slurm-bound connection. `bluehive-host-shell` returns to the allocation host.
-The SSH server uses the fixed `44000-44999` port stored on line 4 of the local
-`user_password.txt`; it fails clearly if that port is occupied on the assigned
-node instead of silently selecting a different port.
+The SSH server uses a fixed `44000-44999` port derived from the remote username
+and stored in the local managed profile; it fails clearly if that port is
+occupied on the assigned node instead of silently selecting a different port.
 Its external host key is generated once under
 `users/$USER/state/remote-ssh/`, protected by a file lock, and reused by later
 jobs. The launcher validates the private/public pair before submission, and the

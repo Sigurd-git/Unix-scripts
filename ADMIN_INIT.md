@@ -17,34 +17,32 @@
 - `dropbear/`: 用户态 Dropbear SSHD，包括 `sbin/dropbear`、`bin/dropbearkey` 和服务端 host keys
 - `remote-vnc/`: VNC 启动脚本、每位用户的私有状态，以及没有公共 SIF 时构建的用户镜像
 
-## 1. 本地凭据文件
+## 1. 本地首次运行
 
-在本地脚本目录创建或更新 `user_password.txt`：
+无需创建凭据文件。直接运行任意入口，例如：
 
-```text
-your_username
-your_password
-/scratch/snormanh_lab/shared
+```bash
+./deploy_remote_tools.sh --all
 ```
 
-第三行是远端工具根目录。要放到其他位置，直接把第三行改成目标路径，或者运行脚本时用 `--root /path/to/shared-tools` 覆盖。
+第一次运行会询问 BlueHive 用户名、远端工具根目录和可选密码。新用户的
+远端根目录默认为 `/scratch/<username>`。脚本会询问是否把用户名、根目录
+和自动生成的固定 VNC 端口保存到
+`~/.config/unix-scripts/config`，并单独询问是否保存明文密码。配置文件权限
+固定为 `0600`。不保存密码时，OpenSSH 会在建立新登录连接时正常询问。
 
-## 2. SSH 配置
+旧的四行 `user_password.txt` 仍可直接读取，已有用户无需迁移。
 
-确保本机 `~/.ssh/config` 至少包含登录节点和 compute host。`remote_sshd.sh` 会自动改写 compute host 的 `Hostname` 和 `Port`：
+## 2. SSH 连接
 
-```sshconfig
-Host bluehive3
-    Hostname bluehive3.circ.rochester.edu
-    User your_username
-    ControlMaster auto
-    ControlPath /tmp/ssh_bluehive3
+所有入口都使用完整主机名、明确的用户和项目管理的 ControlMaster，不读取
+或改写 `~/.ssh/config`。进入登录节点使用：
 
-Host bluehive_compute3
-    Hostname bhg0049
-    User your_username
-    ProxyJump bluehive3
+```bash
+./cluster_ssh.sh --cluster bluehive3
 ```
+
+VNC 作业启动后，使用仓库自带的 `blhc3` 命令进入容器。
 
 ## 3. 一键部署远端工具
 
@@ -116,13 +114,15 @@ Cursor tunnel 保留为显式选项：
 
 ## 7. Remote SSHD
 
-启动 Dropbear SSHD job，并自动更新本机 compute host 的 SSH 配置：
+启动 Dropbear SSHD job，并保存本机连接状态：
 
 ```bash
 ./remote_sshd.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
 ```
 
-该脚本会先自动确保远端 Dropbear 已部署且 host keys 已生成，然后提交 `my_sshd` Slurm job。启动后会从 `~/logs/dropbear.log` 读取端口和节点，并调用 `update_ssh_config.sh` 写入 `~/.ssh/config`。
+该脚本会先自动确保远端 Dropbear 已部署且 host keys 已生成，然后提交
+`my_sshd` Slurm job。启动后会从 `~/logs/dropbear.log` 读取端口和节点，
+保存连接状态，然后用 `blhc3 --service sshd` 进入该作业。
 
 ## 8. Remote VNC
 
@@ -135,7 +135,7 @@ VNC 使用以下公共只读镜像：
 启动一个独立的 VNC Slurm 作业：
 
 ```bash
-./remote_vnc.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
+./remote_vnc.sh
 ```
 
 脚本会在 `$REMOTE_SHARED_ROOT/remote-vnc/releases/` 检查带 SHA-256 的脚本版本。缺少时才会复制。密码、SSH 密钥、日志和作业状态保存在：
@@ -152,32 +152,36 @@ $REMOTE_SHARED_ROOT/remote-vnc/users/$USER/
 ./remote_vnc.sh --root /path/you/can/write --no-open
 ```
 
-启动完成后，`ssh blhc3` 会进入同一个 VNC Slurm 作业。可写环境会默认在作业专属的 Apptainer service instance 中启动 OpenCodex 和 Codex app-server；`ssh blhc3` 使用的 `ocx` 和 `codex` 会进入同一个 instance。首次启动还会把当前用户的配置、认证、个人 skills、plugins 和 memories 复制到容器的私有持久 HOME。
+启动完成后，`blhc3` 会进入同一个 VNC Slurm 作业。可写环境会默认在作业
+专属的 Apptainer service instance 中启动 OpenCodex 和 Codex app-server；
+`blhc3` 使用的 `ocx` 和 `codex` 会进入同一个 instance。首次启动还会把
+当前用户的配置、认证、个人 skills、plugins 和 memories 复制到容器的私有
+持久 HOME。
 
 ## 9. 验证
 
 检查远端工具：
 
 ```bash
-ssh bluehive3 'ls -l /scratch/snormanh_lab/shared/code /scratch/snormanh_lab/shared/cursor /scratch/snormanh_lab/shared/dropbear/sbin/dropbear'
+./cluster_ssh.sh --cluster bluehive3 -- 'ls -l /scratch/snormanh_lab/shared/code /scratch/snormanh_lab/shared/cursor /scratch/snormanh_lab/shared/dropbear/sbin/dropbear'
 ```
 
 检查 Dropbear host keys：
 
 ```bash
-ssh bluehive3 'ls -l /scratch/snormanh_lab/shared/dropbear/.ssh'
+./cluster_ssh.sh --cluster bluehive3 -- 'ls -l /scratch/snormanh_lab/shared/dropbear/.ssh'
 ```
 
 检查 tunnel job：
 
 ```bash
-ssh bluehive3 'squeue -u "$USER" -O jobarrayid:18,name:32,nodelist:20,state:12'
+./cluster_ssh.sh --cluster bluehive3 -- 'squeue -u "$USER" -O jobarrayid:18,name:32,nodelist:20,state:12'
 ```
 
 检查 VNC 用户目录权限：
 
 ```bash
-ssh bluehive3 'stat -c "%a %n" /scratch/snormanh_lab/shared/remote-vnc/users/"$USER"'
+./cluster_ssh.sh --cluster bluehive3 -- 'stat -c "%a %n" /scratch/snormanh_lab/shared/remote-vnc/users/"$USER"'
 ```
 
 ## 10. 常见问题

@@ -85,11 +85,13 @@ main() {
 
     parse_args "$@"
 
-    env "${SSH_LOCALE_ENV[@]}" "$script_dir/start_ssh_control.sh" -a "$CLUSTER" || exit $?
+    # shellcheck disable=SC1090
+    source "$script_dir/start_ssh_control.sh" -a "$CLUSTER" || exit $?
 
     remote_command="$(build_remote_command "${SCANCEL_ARGS[@]}")"
     login_command="LC_ALL=C LANG=C LC_CTYPE=C bash -lc $(shell_quote "$remote_command")"
-    exec env "${SSH_LOCALE_ENV[@]}" ssh -T "$CLUSTER" "$login_command"
+    exec env "${SSH_LOCALE_ENV[@]}" ssh -F /dev/null \
+        -o "ControlPath=$SSH_CONTROL_PATH" -T "$SSH_LOGIN_TARGET" "$login_command"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -17,34 +17,36 @@ This directory stores:
 - `dropbear/`: user-space Dropbear SSHD, including `sbin/dropbear`, `bin/dropbearkey`, and server host keys
 - `remote-vnc/`: VNC launch files, private per-user state, and user-built images when the shared SIF is unavailable
 
-## 1. Local Credential File
+## 1. First Local Run
 
-Create or update `user_password.txt` in the local script directory:
+No credential file needs to be created. Run any entry point directly, for
+example:
 
-```text
-your_username
-your_password
-/scratch/snormanh_lab/shared
+```bash
+./deploy_remote_tools.sh --all
 ```
 
-The third line is the remote tool root. To use a different location, change the third line directly, or override it at runtime with `--root /path/to/shared-tools`.
+The first run asks for the BlueHive username, remote tool root, and an optional
+password. A new user's root defaults to `/scratch/<username>`. The script asks
+whether to save the username, root, and derived fixed VNC port under
+`~/.config/unix-scripts/config`, then asks separately whether the plaintext
+password should be included. The file always uses mode `0600`. When no password
+is saved, OpenSSH prompts while establishing a new login connection.
 
-## 2. SSH Configuration
+The historical four-line `user_password.txt` format remains supported.
 
-Make sure your local `~/.ssh/config` contains at least the login node and the compute host. `remote_sshd.sh` automatically rewrites the compute host `Hostname` and `Port`:
+## 2. SSH Connections
 
-```sshconfig
-Host bluehive3
-    Hostname bluehive3.circ.rochester.edu
-    User your_username
-    ControlMaster auto
-    ControlPath /tmp/ssh_bluehive3
+Every entry point uses the full hostname, explicit user, and a project-managed
+ControlMaster. It neither reads nor rewrites `~/.ssh/config`. Open a login-node
+shell with:
 
-Host bluehive_compute3
-    Hostname bhg0049
-    User your_username
-    ProxyJump bluehive3
+```bash
+./cluster_ssh.sh --cluster bluehive3
 ```
+
+After a VNC job starts, use the repository's `blhc3` command to enter its
+container.
 
 ## 3. One-Command Remote Tool Deployment
 
@@ -116,13 +118,16 @@ It first checks `$REMOTE_SHARED_ROOT/cursor`. If missing, it tries to deploy fro
 
 ## 7. Remote SSHD
 
-Start a Dropbear SSHD job and automatically update the local compute host SSH config:
+Start a Dropbear SSHD job and save its local connection state:
 
 ```bash
 ./remote_sshd.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
 ```
 
-The script first ensures remote Dropbear is deployed and host keys exist, then submits the `my_sshd` Slurm job. After startup, it reads the port and node from `~/logs/dropbear.log`, then calls `update_ssh_config.sh` to update `~/.ssh/config`.
+The script first ensures remote Dropbear is deployed and host keys exist, then
+submits the `my_sshd` Slurm job. After startup, it reads the port and node from
+`~/logs/dropbear.log`, saves the connection state, and connects with
+`blhc3 --service sshd`.
 
 ## 8. Remote VNC
 
@@ -135,7 +140,7 @@ VNC prefers this shared read-only image:
 Start an independent VNC Slurm job:
 
 ```bash
-./remote_vnc.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
+./remote_vnc.sh
 ```
 
 The script checks for a SHA-256-named script release under
@@ -157,9 +162,9 @@ Override the writable remote root for one run with:
 ./remote_vnc.sh --root /path/you/can/write --no-open
 ```
 
-After startup, `ssh blhc3` enters the same VNC Slurm allocation. A mutable
+After startup, `blhc3` enters the same VNC Slurm allocation. A mutable
 environment starts OpenCodex and Codex app-server in a job-scoped Apptainer
-service instance by default; `ocx` and `codex` invoked through `ssh blhc3` join
+service instance by default; `ocx` and `codex` invoked through `blhc3` join
 that same instance. Its first launch also copies the current user's
 configuration, authentication, personal skills, plugins, and memories into the
 container's private persistent home.
@@ -169,25 +174,25 @@ container's private persistent home.
 Check remote tools:
 
 ```bash
-ssh bluehive3 'ls -l /scratch/snormanh_lab/shared/code /scratch/snormanh_lab/shared/cursor /scratch/snormanh_lab/shared/dropbear/sbin/dropbear'
+./cluster_ssh.sh --cluster bluehive3 -- 'ls -l /scratch/snormanh_lab/shared/code /scratch/snormanh_lab/shared/cursor /scratch/snormanh_lab/shared/dropbear/sbin/dropbear'
 ```
 
 Check Dropbear host keys:
 
 ```bash
-ssh bluehive3 'ls -l /scratch/snormanh_lab/shared/dropbear/.ssh'
+./cluster_ssh.sh --cluster bluehive3 -- 'ls -l /scratch/snormanh_lab/shared/dropbear/.ssh'
 ```
 
 Check tunnel jobs:
 
 ```bash
-ssh bluehive3 'squeue -u "$USER" -O jobarrayid:18,name:32,nodelist:20,state:12'
+./cluster_ssh.sh --cluster bluehive3 -- 'squeue -u "$USER" -O jobarrayid:18,name:32,nodelist:20,state:12'
 ```
 
 Check the private VNC directory permissions:
 
 ```bash
-ssh bluehive3 'stat -c "%a %n" /scratch/snormanh_lab/shared/remote-vnc/users/"$USER"'
+./cluster_ssh.sh --cluster bluehive3 -- 'stat -c "%a %n" /scratch/snormanh_lab/shared/remote-vnc/users/"$USER"'
 ```
 
 ## 10. Common Issues

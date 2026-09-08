@@ -12,7 +12,8 @@ remote_tools_require_context() {
 }
 
 remote_tools_control_path() {
-    printf '%s\n' "${REMOTE_TOOLS_CONTROL_PATH:-/tmp/ssh_$CLUSTER}"
+    printf '%s\n' \
+        "${REMOTE_TOOLS_CONTROL_PATH:-${SSH_CONTROL_PATH:-/tmp/ssh_$CLUSTER}}"
 }
 
 remote_tools_ssh() {
@@ -20,7 +21,8 @@ remote_tools_ssh() {
 
     remote_tools_require_context || return 1
     control_path="$(remote_tools_control_path)"
-    ssh -o ControlMaster=auto \
+    ssh -F /dev/null \
+        -o ControlMaster=auto \
         -o ControlPath="$control_path" \
         -o StrictHostKeyChecking=no \
         -T "$USER@$HOSTNAME" "$@"
@@ -31,7 +33,8 @@ remote_tools_ssh_bash() {
 
     remote_tools_require_context || return 1
     control_path="$(remote_tools_control_path)"
-    ssh -o ControlMaster=auto \
+    ssh -F /dev/null \
+        -o ControlMaster=auto \
         -o ControlPath="$control_path" \
         -o StrictHostKeyChecking=no \
         -T "$USER@$HOSTNAME" \
@@ -49,7 +52,8 @@ remote_tools_ssh_bash_args() {
         remote_command+=" $(printf '%q' "$argument")"
     done
 
-    ssh -o ControlMaster=auto \
+    ssh -F /dev/null \
+        -o ControlMaster=auto \
         -o ControlPath="$control_path" \
         -o StrictHostKeyChecking=no \
         -T "$USER@$HOSTNAME" \
@@ -67,7 +71,8 @@ remote_tools_ssh_command() {
         remote_command+=" $(printf '%q' "$argument")"
     done
 
-    ssh -o ControlMaster=auto \
+    ssh -F /dev/null \
+        -o ControlMaster=auto \
         -o ControlPath="$control_path" \
         -o StrictHostKeyChecking=no \
         -T "$USER@$HOSTNAME" \
@@ -452,7 +457,8 @@ copy_remote_dropbear_tree() {
     fi
 
     echo "Copying local dropbear tree to $REMOTE_SHARED_ROOT/dropbear..."
-    tar -C "$remote_tools_dir" -czf - dropbear | ssh -o ControlMaster=auto \
+    tar -C "$remote_tools_dir" -czf - dropbear | ssh -F /dev/null \
+        -o ControlMaster=auto \
         -o ControlPath="$control_path" \
         -o StrictHostKeyChecking=no \
         -T "$USER@$HOSTNAME" \

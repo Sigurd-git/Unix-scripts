@@ -185,7 +185,9 @@ fi
 
 TUNNEL_JOB_NAME="${TUNNEL_TOOL}_tunnel"
 
-ssh -o ControlMaster=auto -o ControlPath=/tmp/ssh_$CLUSTER -o StrictHostKeyChecking=no "$USER@$HOSTNAME" \
+ssh -F /dev/null -o ControlMaster=auto \
+    -o "ControlPath=$SSH_CONTROL_PATH" -o StrictHostKeyChecking=no \
+    "$SSH_LOGIN_TARGET" \
     "REMOTE_USER=$(printf "%q" "$USER") CLUSTER=$(printf "%q" "$CLUSTER") PARTITION=$(printf "%q" "$PARTITION") CPUS=$(printf "%q" "$CPUS") GPUS=$(printf "%q" "$GPUS") MEMORY=$(printf "%q" "$MEMORY") TIME=$(printf "%q" "$TIME") NODE=$(printf "%q" "$NODE") NO_LOG=$(printf "%q" "$NO_LOG") TUNNEL_TOOL=$(printf "%q" "$TUNNEL_TOOL") TUNNEL_BIN=$(printf "%q" "$TUNNEL_BIN") TUNNEL_ENV=$(printf "%q" "$TUNNEL_ENV") TUNNEL_NAME=$(printf "%q" "$TUNNEL_NAME") TUNNEL_JOB_NAME=$(printf "%q" "$TUNNEL_JOB_NAME") bash -s" <<'ENDSSH'
 #!/bin/bash
 module load gcc 2>/dev/null || true

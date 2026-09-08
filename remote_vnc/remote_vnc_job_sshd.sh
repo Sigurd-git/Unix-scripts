@@ -402,7 +402,7 @@ remote_ssh_port="${requested_remote_ssh_port}"
 if port_is_listening "${remote_ssh_port}"; then
     printf 'Configured remote SSH port %s is already in use on %s.\n' \
         "${remote_ssh_port}" "${expected_node}" >&2
-    printf 'Choose another port from 44000 to 44999 on line 4 of user_password.txt, then restart.\n' \
+    printf 'Choose another REMOTE_VNC_SSH_PORT from 44000 to 44999, then restart.\n' \
         >&2
     exit 4
 fi

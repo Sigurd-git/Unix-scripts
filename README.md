@@ -1,14 +1,16 @@
-# My Mac Scripts - Cluster Management Tools
+# Unix Scripts - BlueHive CLI
 
-My macOS scripts for convenient cluster management using iTerm or Terminal, with automatic hostname mapping and modern GUI interface.
+Command-line tools for starting Slurm-aware SSH, VNC, and development
+environments from macOS.
 
 ## Features
 
-- **GUI Cluster Manager**: Modern tkinter-based interface for cluster management
 - **Automatic Hostname Mapping**: Supports bluehive, bluehive3, and bhward clusters with automatic hostname resolution
+- **Zero SSH Config Setup**: Cluster entry points use explicit hosts and a managed OpenSSH control master; `~/.ssh/config` is not required
+- **First-run Setup**: Prompts for the remote account and storage root, then optionally saves them
 - **Reusable Login Connection**: Reuses an OpenSSH control master, so a running connection does not request the login password again
 - **Slurm-aware Remote Access**: Starts VS Code/Cursor tunnels, Dropbear SSHD, or VNC inside separate Slurm jobs
-- **Container SSH and SFTP**: `ssh blhc3` opens Fish inside the VNC job's Apptainer environment while preserving its Slurm cgroup
+- **Container SSH and SFTP**: `blhc3` opens Fish inside the VNC job's Apptainer environment while preserving its Slurm cgroup
 - **Persistent Apptainer Environment**: Gives each user a writable fakeroot sandbox with `apt`, MATLAB, CUDA, Chrome, ChatGPT, uv, pixi, and compilers
 - **Container Batch Jobs**: `sbatch job.sh` from the container preserves the script's `#SBATCH` directives and runs the complete Bash script in the environment
 - **Self-deploying Remote Files**: Copies missing tools and checksum-versioned VNC files under `REMOTE_SHARED_ROOT`
@@ -28,114 +30,49 @@ All scripts automatically map cluster names to their full hostnames.
 
 For zsh:
 ```zsh
-git clone https://github.com/Sigurd-git/Unix-scripts.git
-cd Unix-scripts
-echo "PATH=$PWD:$PATH" >> ~/.zshrc
+git clone https://github.com/Sigurd-git/my_mac_scripts.git
+cd my_mac_scripts
+printf 'export PATH="%s:$PATH"\n' "$PWD" >> ~/.zshrc
 source ~/.zshrc
 ```
 
 For bash:
 ```bash
-git clone https://github.com/Sigurd-git/Unix-scripts.git
-cd Unix-scripts
-echo "PATH=$PWD:$PATH" >> ~/.bashrc
+git clone https://github.com/Sigurd-git/my_mac_scripts.git
+cd my_mac_scripts
+printf 'export PATH="%s:$PATH"\n' "$PWD" >> ~/.bashrc
 source ~/.bashrc
 ```
 
-### 2. Setup Environment
+### 2. Start
 
 ```bash
-# Make scripts executable
-chmod 755 ./*.sh
-
-# Install Python dependencies (for GUI)
-uv sync
+./remote_vnc.sh
 ```
 
-### 3. Configure Credentials
+The first command asks for:
 
-Create `user_password.txt` in the same directory:
-```
-username
-password
-/scratch/username
-44123
-```
+- the BlueHive username;
+- a writable remote root, defaulting to `/scratch/<username>`;
+- an optional password for the first SSH connection;
+- whether to save the profile and whether to include the password.
 
-The third line is the remote tool root for `code`, `cursor`, `dropbear`, and
-the per-user VNC files. It may be blank to use
-`/scratch/snormanh_lab/shared`. The fourth line is the fixed compute-node SSH
-port used by `remote_vnc.sh` and must be in `44000-44999`. When it is missing or
-blank, the script derives the same port from the remote username and writes it
-to line 4. Prefer a root owned by the account instead of another user's
-directory. Protect this local file and never commit it:
-
-```bash
-chmod 600 user_password.txt
-```
-
-### 4. SSH Configuration (Optional)
-
-For advanced SSH features, configure `~/.ssh/config`:
-```
-Host *
-    ControlMaster auto
-    ControlPath /tmp/ssh_mux_%h_%p_%r
-
-Host bluehive
-    Hostname bluehive.circ.rochester.edu
-    User username
-    ControlMaster auto
-    ControlPath /tmp/ssh_bluehive
-
-Host bluehive3
-    Hostname bluehive3.circ.rochester.edu
-    User username
-    ControlMaster auto
-    ControlPath /tmp/ssh_bluehive3
-
-Host bhward
-    Hostname bhward.circ.rochester.edu
-    User username
-    ControlMaster auto
-    ControlPath /tmp/ssh_bhward
-
-Host bluehive_compute
-    Hostname bhg0061
-    User username
-    ProxyJump bluehive
-
-Host bluehive_compute3 blhc3
-    # remote_sshd.sh and remote_vnc.sh rewrite these values for the allocation.
-    Hostname bhg0049
-    Port 22
-    User username
-    ProxyJump bluehive3
-    ControlMaster auto
-    ControlPath /tmp/ssh_bluehive_compute3
-```
+Saved profiles use `~/.config/unix-scripts/config` with mode `0600`. Passwords
+are optional. When no password is saved, OpenSSH asks for it as needed. The
+fixed VNC SSH port is derived from the username and saved automatically.
+Existing `user_password.txt` files continue to work and take precedence, so
+current installations do not need migration.
 
 ## Usage
-
-### GUI Interface (Recommended)
-
-```bash
-uv run python gui_cluster_manager.py
-```
-
-The GUI provides:
-- User authentication with password save option
-- Parameter configuration for all tunnel options
-- Real-time output display
-- Cluster selection with automatic hostname mapping
-- Remote SSHD launch through `remote_sshd.sh`, including SSH config update for the allocated node
-- Remote tool root configuration for automatic deployment of `code`, `cursor`, `dropbear`, and VNC files
 
 For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.en.md](ADMIN_INIT.en.md).
 
 ### Command Line Interface
 
 ```bash
+# Open a login-node shell without an SSH config entry
+./cluster_ssh.sh --cluster bluehive3
+
 # Start a VS Code tunnel on bluehive3 with default parameters
 ./tunnel.sh
 
@@ -148,8 +85,11 @@ For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.
 # Start a Cursor tunnel instead of the default VS Code tunnel
 ./tunnel.sh -a bluehive3 --tool cursor -p doppelbock -c 16 -g 1 -m 256 -t 12
 
-# Start a Dropbear SSHD job and update the compute host entry in ~/.ssh/config
+# Start a Dropbear SSHD job and save its managed connection state
 ./remote_sshd.sh -a bluehive3 -p doppelbock -c 16 -g 1 -m 256 -t 24
+
+# Enter that Dropbear allocation
+blhc3 --service sshd
 
 # Deploy or repair remote tools manually
 ./deploy_remote_tools.sh -a bluehive3 --all
@@ -168,6 +108,9 @@ For first-time cluster setup, see [ADMIN_INIT.md](ADMIN_INIT.md) or [ADMIN_INIT.
 
 # Reuse the running VNC job without opening a viewer
 ./remote_vnc.sh --no-open
+
+# Enter the running VNC job's Apptainer environment
+blhc3
 ```
 
 ### Remote VNC and Slurm-bound SSH
@@ -178,7 +121,7 @@ The job remains separate from the `my_sshd` job created by `remote_sshd.sh`.
 
 The VNC job starts two SSH services:
 
-- The Mac connects with `ssh blhc3` to a public-key-only sshd running inside
+- The Mac connects with `blhc3` to a public-key-only sshd running inside
   the read-only Apptainer rootfs.
 - The container and the **Bluehive Host Terminal** use a private localhost sshd
   to return to the compute host.
@@ -198,7 +141,7 @@ network. Host operations remain available through `bluehive-host-shell`.
 
 #### Start or reuse VNC
 
-Start with the defaults (16 CPUs, 1 GPU, 256 GiB, 24 hours):
+Start with the defaults (8 CPUs, no GPU, 64 GiB, 120 hours):
 
 ```bash
 ./remote_vnc.sh
@@ -286,22 +229,25 @@ protocol.
 
 #### Remote root and file layout
 
-The script reads `REMOTE_SHARED_ROOT` from the third line of
-`user_password.txt`. The root is selected in this order:
+The script reads `REMOTE_SHARED_ROOT` from the saved remote profile. The root
+is selected in this order:
 
 1. `-r PATH` or `--root PATH`
-2. The third line of `user_password.txt`
-3. `/scratch/snormanh_lab/shared`
+2. `REMOTE_SHARED_ROOT` from the saved profile
+3. `/scratch/<username>` for a new profile
+4. `/scratch/snormanh_lab/shared` for a legacy profile with a blank third line
 
-The third line may be empty as long as its newline is retained before line 4.
-Line 4 stores the fixed container SSH port. A newly allocated VNC job reuses
-that port, so clients no longer need a port update after every job restart. If
-several clients have separate copies of `user_password.txt`, keep the same
-fourth line on each client; missing values are derived consistently from the
-remote username. The external SSH server host key is generated once under the
-private remote user directory and reused by later Slurm jobs. Each client
-verifies and stores that key on its first launch; restarting a job on the same
+The profile stores the fixed container SSH port. A newly allocated VNC job
+reuses that port, so clients no longer need a port update after every job
+restart. Missing values are derived consistently from the remote username. The
+external SSH server host key is generated once under the private remote user
+directory and reused by later Slurm jobs. Each client verifies and stores that
+key on its first launch; restarting a job on the same
 node no longer changes the SSH port or server identity.
+
+The first VNC launch also creates a dedicated client key at
+`~/.local/share/unix-scripts/id_ed25519`. It does not depend on an existing
+personal SSH key. Set `REMOTE_VNC_IDENTITY_FILE` to use another identity.
 
 Override it for one run with:
 
@@ -420,7 +366,7 @@ eight. Restart the VNC job so it regenerates TigerVNC's password file:
 After startup, connect directly to the mutable Apptainer environment:
 
 ```bash
-ssh blhc3
+blhc3
 ```
 
 The login shell is Fish. Return to a Bash shell on the allocated compute host
@@ -486,7 +432,7 @@ familiar `bh-env` command is also proxied through the same backchannel.
 `bh-env shell` opens a fresh container mount, so it sees packages installed by
 the preceding admin shell immediately. `bh-env exec -- COMMAND`, new batch
 jobs, and new **Environment Terminal** launchers do the same. Use
-`./remote_vnc.sh --restart` when the base `ssh blhc3` shell, the existing VNC
+`./remote_vnc.sh --restart` when the base `blhc3` shell, the existing VNC
 desktop, OpenCodex, and Codex app-server should all reload the changed rootfs.
 
 Changes to the sandbox and its home directory persist across VNC jobs. Use a
@@ -494,7 +440,7 @@ named environment when separate software stacks are useful:
 
 ```bash
 ./remote_vnc.sh --env experiment --restart
-ssh blhc3
+blhc3
 ```
 
 `--immutable` starts the prior read-only SIF workflow, skips sandbox creation,
@@ -503,7 +449,7 @@ or mode for an active VNC allocation requires `--restart`.
 
 #### Submit batch scripts in the environment
 
-From `ssh blhc3`, submit a script directly:
+From `blhc3`, submit a script directly:
 
 ```bash
 sbatch analysis.sh
@@ -551,16 +497,16 @@ for manual recovery.
 Check that the shell is in the expected Slurm job and can see host resources:
 
 ```bash
-ssh blhc3 'printf "job=%s node=%s env=%s\n" "$SLURM_JOB_ID" "$(hostname -s)" "$BH_ENV_NAME"; cat /proc/self/cgroup; command -v matlab; nvidia-smi -L'
-ssh blhc3 "bluehive-host-shell 'type module; cat /proc/self/cgroup'"
+blhc3 'printf "job=%s node=%s env=%s\n" "$SLURM_JOB_ID" "$(hostname -s)" "$BH_ENV_NAME"; cat /proc/self/cgroup; command -v matlab; nvidia-smi -L'
+blhc3 "bluehive-host-shell 'type module; cat /proc/self/cgroup'"
 ```
 
 OpenCodex and Codex app-server start automatically with every mutable VNC job.
 Check them directly from the container SSH shell:
 
 ```bash
-ssh blhc3 'ocx ready --json'
-ssh blhc3 'codex app-server daemon version'
+blhc3 'ocx ready --json'
+blhc3 'codex app-server daemon version'
 ```
 
 The same managed SSH connection exposes the OpenCodex dashboard on the Mac:
@@ -651,7 +597,9 @@ Run any script with `--help` for its current defaults.
 
 ## Security Features
 
-- `user_password.txt` is ignored by Git and should use mode `0600`.
+- Saved profiles use mode `0600`; saving the password is optional.
+- Cluster SSH commands pass explicit connection parameters and do not read
+  `~/.ssh/config`.
 - VNC listens on compute-node loopback and reaches the Mac through an SSH local forward.
 - TigerVNC keeps connection blacklisting enabled and requires `VncAuth`; its
   send/receive text clipboard parameters are checked before a job is marked ready.

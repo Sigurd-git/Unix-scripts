@@ -25,10 +25,10 @@ local_opencodex_port=10102
 
 start_ssh_control_script="${script_directory}/start_ssh_control.sh"
 read_user_password_script="${script_directory}/read_user_password.sh"
-update_ssh_config_script="${script_directory}/update_ssh_config.sh"
 remote_tools_script="${script_directory}/remote_tools.sh"
 vnc_bundle_directory="${script_directory}/remote_vnc"
-identity_file="${REMOTE_VNC_IDENTITY_FILE:-${HOME}/.ssh/id_ed25519}"
+managed_identity_file="${XDG_DATA_HOME:-${HOME}/.local/share}/unix-scripts/id_ed25519"
+identity_file="${REMOTE_VNC_IDENTITY_FILE:-${managed_identity_file}}"
 shared_image_default="/scratch/snormanh_lab/shared/remote-vnc/images/ubuntu-vnc-xfce-g3_24.04.sif"
 
 print_usage() {
@@ -37,8 +37,8 @@ Usage: remote_vnc.sh [options]
 
 Start or reuse an independent VNC Slurm job. A mutable job starts OpenCodex,
 Codex app-server, and a public-key-only SSH service inside its persistent
-Apptainer environment. The script updates the existing Mac SSH entry "blhc3",
-creates the VNC tunnel, and opens TigerVNC when installed. Direct SSH opens Fish
+Apptainer environment. It creates the SSH and VNC tunnels without reading
+~/.ssh/config, then opens TigerVNC when installed. The blhc3 command opens Fish
 inside the container; bluehive-host-shell returns to the allocated host.
 
 The resource options match remote_sshd.sh. They apply when a new VNC job is
@@ -62,10 +62,10 @@ Options:
   -h, --help    Show this help
 
 After startup:
-  ssh blhc3
+  blhc3
 
 Configuration:
-  user_password.txt line 4  Fixed remote SSH port (44000-44999; auto-created)
+  First use asks for the remote profile and can save it under ~/.config.
 EOF
 }
 
@@ -215,30 +215,18 @@ done
     fail "SSH control script is missing or is not executable: ${start_ssh_control_script}"
 [[ -r "${read_user_password_script}" ]] ||
     fail "user configuration script is missing: ${read_user_password_script}"
-[[ -x "${update_ssh_config_script}" ]] ||
-    fail "SSH config script is missing or is not executable: ${update_ssh_config_script}"
 [[ -r "${remote_tools_script}" ]] ||
     fail "remote tool helper is missing: ${remote_tools_script}"
 [[ -d "${vnc_bundle_directory}" ]] ||
     fail "VNC bundle is missing: ${vnc_bundle_directory}"
-[[ -r "${identity_file}" && -r "${identity_file}.pub" ]] ||
-    fail "SSH identity or public key is missing: ${identity_file}"
-ssh-keygen -lf "${identity_file}.pub" >/dev/null ||
-    fail "invalid SSH public key: ${identity_file}.pub"
 
-login_host_alias="${cluster_name}"
-case "${cluster_name}" in
-    bluehive3) vnc_ssh_alias="blhc3" ;;
-    bluehive) vnc_ssh_alias="blhc" ;;
-    bhward) vnc_ssh_alias="bhwc" ;;
-esac
+vnc_ssh_alias="$(cluster_shortcut "${cluster_name}")" || exit 1
 vnc_host_key_alias="remote-vnc-${cluster_name}"
-legacy_vnc_ssh_alias="bhvnc"
-legacy_ssh_control_path="/tmp/ssh_remote_vnc_${cluster_name}"
 known_hosts_file="${HOME}/.ssh/known_hosts_remote_vnc_${cluster_name}"
-ssh_config_file="${HOME}/.ssh/config"
 local_connection_state_file="${HOME}/.ssh/remote_vnc_${cluster_name}.env"
 local_user_name="$(id -un)"
+local_user_id="$(id -u)"
+ssh_control_path="/tmp/unix-scripts-vnc-${local_user_id}-${cluster_name}.sock"
 launch_agent_label="com.${local_user_name}.remote-vnc.${cluster_name}"
 launch_agent_domain="gui/$(id -u)"
 launch_agent_directory="${HOME}/Library/LaunchAgents"
@@ -247,13 +235,7 @@ launch_agent_stdout="${HOME}/Library/Logs/remote-vnc-${cluster_name}.out.log"
 launch_agent_stderr="${HOME}/Library/Logs/remote-vnc-${cluster_name}.err.log"
 remote_requested_node="${requested_node:-__REMOTE_VNC_SCHEDULER__}"
 
-login_control_path="$(
-    /usr/bin/ssh -G "${login_host_alias}" 2>/dev/null |
-        awk '$1 == "controlpath" { print $2; exit }'
-)"
-if [[ -z "${login_control_path}" || "${login_control_path}" == "none" ]]; then
-    login_control_path="/tmp/ssh_${cluster_name}"
-fi
+login_control_path="$(cluster_control_path "${cluster_name}")" || exit 1
 [[ "${login_control_path}" == /* && "${login_control_path}" != *%* ]] ||
     fail "could not resolve the login SSH ControlPath: ${login_control_path}"
 
@@ -261,8 +243,8 @@ ensure_login_control_master() {
     local control_check
 
     control_check="$(
-        /usr/bin/ssh -S "${login_control_path}" -O check \
-            "${login_host_alias}" 2>&1 || true
+        /usr/bin/ssh -F /dev/null -S "${login_control_path}" -O check \
+            "${login_ssh_target}" 2>&1 || true
     )"
     if [[ "${control_check}" == *"Master running"* ]]; then
         return 0
@@ -279,8 +261,8 @@ ensure_login_control_master() {
         fail "could not start the login SSH master"
 
     control_check="$(
-        /usr/bin/ssh -S "${login_control_path}" -O check \
-            "${login_host_alias}" 2>&1 || true
+        /usr/bin/ssh -F /dev/null -S "${login_control_path}" -O check \
+            "${login_ssh_target}" 2>&1 || true
     )"
     [[ "${control_check}" == *"Master running"* ]] ||
         fail "the login SSH master is not running at ${login_control_path}"
@@ -291,17 +273,18 @@ READ_USER_PASSWORD_INITIALIZE_VNC_PORT=true
 # shellcheck disable=SC1090
 source "${read_user_password_script}"
 unset READ_USER_PASSWORD_INITIALIZE_VNC_PORT
-remote_user_name="${USER}"
+remote_user_name="${REMOTE_USER}"
 [[ "${remote_user_name}" =~ ^[A-Za-z0-9._-]+$ ]] ||
     fail "invalid remote user name: ${remote_user_name}"
 configured_remote_ssh_port="${REMOTE_VNC_SSH_PORT}"
 [[ "${configured_remote_ssh_port}" =~ ^[0-9]+$ ]] &&
     ((configured_remote_ssh_port >= 44000 && configured_remote_ssh_port <= 44999)) ||
-    fail "line 4 of ${USER_PASSWORD_FILE} must be a port from 44000 to 44999"
+    fail "REMOTE_VNC_SSH_PORT must be between 44000 and 44999"
 managed_launcher_comment="remote-vnc-managed-v15:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
 
 CLUSTER="${cluster_name}"
 HOSTNAME="$(cluster_hostname "${cluster_name}")" || exit 1
+login_ssh_target="${remote_user_name}@${HOSTNAME}"
 if [[ -n "${root_override}" ]]; then
     REMOTE_SHARED_ROOT="${root_override}"
     export REMOTE_SHARED_ROOT
@@ -318,14 +301,44 @@ log_message "VNC geometry=${vnc_geometry}"
 log_message "REMOTE_SHARED_ROOT=${REMOTE_SHARED_ROOT}"
 if [[ "${REMOTE_VNC_SSH_PORT_CREATED}" == "true" ]]; then
     log_message \
-        "Saved fixed remote SSH port ${configured_remote_ssh_port} to line 4 of ${USER_PASSWORD_FILE}."
+        "Saved fixed remote SSH port ${configured_remote_ssh_port} to ${REMOTE_CONFIG_FILE}."
 else
     log_message "Fixed remote SSH port=${configured_remote_ssh_port}"
 fi
 ensure_login_control_master
 
+ensure_vnc_identity() {
+    local identity_directory
+    local temporary_public_key
+
+    identity_directory="$(dirname "${identity_file}")"
+    mkdir -p "${identity_directory}"
+    chmod 700 "${identity_directory}" 2>/dev/null || true
+
+    if [[ ! -e "${identity_file}" && ! -e "${identity_file}.pub" ]]; then
+        log_message "Creating a dedicated SSH key: ${identity_file}"
+        ssh-keygen -q -t ed25519 -N '' -f "${identity_file}" ||
+            fail "could not create the VNC SSH identity"
+    elif [[ -r "${identity_file}" && ! -e "${identity_file}.pub" ]]; then
+        temporary_public_key="$(mktemp "${identity_file}.pub.XXXXXX")"
+        ssh-keygen -y -f "${identity_file}" > "${temporary_public_key}" ||
+            fail "could not derive the VNC SSH public key"
+        chmod 644 "${temporary_public_key}"
+        mv "${temporary_public_key}" "${identity_file}.pub"
+    fi
+
+    [[ -r "${identity_file}" && -r "${identity_file}.pub" ]] ||
+        fail "SSH identity or public key is missing: ${identity_file}"
+    chmod 600 "${identity_file}"
+    ssh-keygen -lf "${identity_file}.pub" >/dev/null ||
+        fail "invalid SSH public key: ${identity_file}.pub"
+}
+
+ensure_vnc_identity
+
 REMOTE_TOOLS_CONTROL_PATH="${login_control_path}"
-export CLUSTER HOSTNAME USER REMOTE_SHARED_ROOT REMOTE_TOOLS_CONTROL_PATH
+export CLUSTER HOSTNAME USER REMOTE_USER REMOTE_SHARED_ROOT
+export REMOTE_TOOLS_CONTROL_PATH
 # shellcheck disable=SC1090
 source "${remote_tools_script}"
 log_message "Checking and copying the VNC bundle when needed..."
@@ -458,9 +471,10 @@ printf '[remote-vnc] Persistent SSH host key %s: %s\n' \
     "${persistent_server_key_status}" "${persistent_server_public_key}" >&2
 REMOTE_PREPARE
 
-/usr/bin/scp -q -O -o BatchMode=yes -o "ControlPath=${login_control_path}" \
+/usr/bin/scp -F /dev/null -q -O -o BatchMode=yes \
+    -o "ControlPath=${login_control_path}" \
     "${identity_file}.pub" \
-    "${login_host_alias}:${remote_key_temporary_file}" ||
+    "${login_ssh_target}:${remote_key_temporary_file}" ||
     fail "could not upload the Mac public key"
 remote_tools_ssh_bash_args \
     "${remote_key_temporary_file}" "${remote_authorized_keys_file}" <<'REMOTE_INSTALL_KEY'
@@ -1314,52 +1328,22 @@ ssh-keygen -lf "${known_hosts_temporary_file}" >/dev/null || {
 chmod 600 "${known_hosts_temporary_file}"
 mv "${known_hosts_temporary_file}" "${known_hosts_file}"
 
-legacy_managed_block_begin="# BEGIN remote_vnc.sh ${cluster_name}"
-legacy_managed_block_end="# END remote_vnc.sh ${cluster_name}"
-if grep -Fqx "${legacy_managed_block_begin}" "${ssh_config_file}" ||
-   [[ -S "${legacy_ssh_control_path}" ]]; then
-    log_message "Removing the old ${legacy_vnc_ssh_alias} SSH entry."
-    launchctl bootout "${launch_agent_domain}/${launch_agent_label}" \
-        >/dev/null 2>&1 || true
-    /usr/bin/ssh \
-        -S "${legacy_ssh_control_path}" \
-        -O exit \
-        "${legacy_vnc_ssh_alias}" >/dev/null 2>&1 || true
-    for _ in 1 2 3 4 5; do
-        [[ ! -S "${legacy_ssh_control_path}" ]] && break
-        sleep 1
-    done
-    if [[ -S "${legacy_ssh_control_path}" ]]; then
-        unlink "${legacy_ssh_control_path}"
-    fi
-
-    ssh_config_temporary_file="$(mktemp "${ssh_config_file}.XXXXXX")"
-    awk \
-        -v managed_block_begin="${legacy_managed_block_begin}" \
-        -v managed_block_end="${legacy_managed_block_end}" '
-            $0 == managed_block_begin { in_managed_block = 1; next }
-            $0 == managed_block_end { in_managed_block = 0; next }
-            !in_managed_block { print }
-        ' "${ssh_config_file}" > "${ssh_config_temporary_file}"
-    chmod 600 "${ssh_config_temporary_file}"
-    mv "${ssh_config_temporary_file}" "${ssh_config_file}"
-fi
-
-"${update_ssh_config_script}" \
-    -a "${cluster_name}" \
-    -p "${actual_partition}" \
-    -o "${remote_ssh_port}" \
-    -w "${vnc_node}"
-
-ssh_control_path="$(
-    /usr/bin/ssh -G "${vnc_ssh_alias}" 2>/dev/null |
-        awk '$1 == "controlpath" { print $2; exit }'
-)"
-[[ "${ssh_control_path}" == /* && "${ssh_control_path}" != *%* ]] ||
-    fail "could not resolve the ${vnc_ssh_alias} SSH ControlPath: ${ssh_control_path:-unset}"
-
-/usr/bin/ssh -G "${vnc_ssh_alias}" >/dev/null 2>&1 ||
-    fail "the ${vnc_ssh_alias} SSH config is invalid"
+vnc_ssh_target="${remote_user_name}@${vnc_node}"
+printf -v login_proxy_command \
+    '/usr/bin/ssh -F /dev/null -S %q -o BatchMode=yes -o ConnectTimeout=15 -W %%h:%%p %q' \
+    "${login_control_path}" "${login_ssh_target}"
+vnc_ssh_connection_options=(
+    -F /dev/null
+    -p "${remote_ssh_port}"
+    -o BatchMode=yes
+    -o ConnectTimeout=15
+    -o StrictHostKeyChecking=yes
+    -o "UserKnownHostsFile=${known_hosts_file}"
+    -o "HostKeyAlias=${vnc_host_key_alias}"
+    -o "IdentityFile=${identity_file}"
+    -o IdentitiesOnly=yes
+    -o "ProxyCommand=${login_proxy_command}"
+)
 
 local_listener_process_ids() {
     lsof -nP -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | sort -u
@@ -1457,7 +1441,8 @@ stop_local_vnc_connection() {
         launchctl bootout "${launch_agent_domain}/${launch_agent_label}" \
             >/dev/null 2>&1 || true
     fi
-    /usr/bin/ssh -S "${ssh_control_path}" -O exit "${vnc_ssh_alias}" \
+    /usr/bin/ssh -F /dev/null -S "${ssh_control_path}" -O exit \
+        "${vnc_ssh_target}" \
         >/dev/null 2>&1 || true
     for _ in 1 2 3 4 5; do
         [[ ! -S "${ssh_control_path}" ]] && break
@@ -1469,7 +1454,8 @@ stop_local_vnc_connection() {
 }
 
 master_check_output="$(
-    /usr/bin/ssh -S "${ssh_control_path}" -O check "${vnc_ssh_alias}" 2>&1 || true
+    /usr/bin/ssh -F /dev/null -S "${ssh_control_path}" -O check \
+        "${vnc_ssh_target}" 2>&1 || true
 )"
 local_vnc_port=""
 ssh_master_process_id=""
@@ -1480,10 +1466,9 @@ if [[ "${master_check_output}" == *"Master running"* ]]; then
         sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' <<< "${master_check_output}"
     )"
     connected_job_id="$(
-        /usr/bin/ssh \
-            -o BatchMode=yes \
-            -o ConnectTimeout=10 \
-            "${vnc_ssh_alias}" \
+        /usr/bin/ssh "${vnc_ssh_connection_options[@]}" \
+            -S "${ssh_control_path}" \
+            "${vnc_ssh_target}" \
             'printf "%s\n" "${SLURM_JOB_ID:-}"' \
             2>/dev/null || true
     )"
@@ -1521,6 +1506,31 @@ if [[ "${master_check_output}" != *"Master running"* ]]; then
         fail "no free local VNC port was found"
     local_forward_specification="127.0.0.1:${local_vnc_port}:127.0.0.1:${remote_vnc_port}"
 
+    xml_escape() {
+        local escaped_value="$1"
+
+        escaped_value="${escaped_value//&/&amp;}"
+        escaped_value="${escaped_value//</&lt;}"
+        escaped_value="${escaped_value//>/&gt;}"
+        escaped_value="${escaped_value//\"/&quot;}"
+        escaped_value="${escaped_value//\'/&apos;}"
+        printf '%s' "${escaped_value}"
+    }
+
+    launch_agent_arguments=(
+        /usr/bin/ssh
+        -MN
+        -S "${ssh_control_path}"
+        -o ControlMaster=yes
+        -o ControlPersist=no
+        -o ExitOnForwardFailure=yes
+        -o ServerAliveInterval=60
+        -o ServerAliveCountMax=3
+        "${vnc_ssh_connection_options[@]}"
+        -L "${local_forward_specification}"
+        "${vnc_ssh_target}"
+    )
+
     mkdir -p "${launch_agent_directory}" "${HOME}/Library/Logs"
     launch_agent_temporary_file="$(mktemp "${launch_agent_file}.XXXXXX")"
     {
@@ -1529,34 +1539,13 @@ if [[ "${master_check_output}" != *"Master running"* ]]; then
         printf '%s\n' '<plist version="1.0">'
         printf '%s\n' '<dict>'
         printf '%s\n' '    <key>Label</key>'
-        printf '    <string>%s</string>\n' "${launch_agent_label}"
+        printf '    <string>%s</string>\n' "$(xml_escape "${launch_agent_label}")"
         printf '%s\n' '    <key>ProgramArguments</key>'
         printf '%s\n' '    <array>'
-        printf '%s\n' '        <string>/usr/bin/ssh</string>'
-        printf '%s\n' '        <string>-MN</string>'
-        printf '%s\n' '        <string>-S</string>'
-        printf '        <string>%s</string>\n' "${ssh_control_path}"
-        printf '%s\n' '        <string>-o</string>'
-        printf '%s\n' '        <string>BatchMode=yes</string>'
-        printf '%s\n' '        <string>-o</string>'
-        printf '%s\n' '        <string>ConnectTimeout=15</string>'
-        printf '%s\n' '        <string>-o</string>'
-        printf '%s\n' '        <string>ControlPersist=no</string>'
-        printf '%s\n' '        <string>-o</string>'
-        printf '%s\n' '        <string>ExitOnForwardFailure=yes</string>'
-        printf '%s\n' '        <string>-o</string>'
-        printf '%s\n' '        <string>StrictHostKeyChecking=yes</string>'
-        printf '%s\n' '        <string>-o</string>'
-        printf '        <string>UserKnownHostsFile=%s</string>\n' "${known_hosts_file}"
-        printf '%s\n' '        <string>-o</string>'
-        printf '        <string>HostKeyAlias=%s</string>\n' "${vnc_host_key_alias}"
-        printf '%s\n' '        <string>-o</string>'
-        printf '        <string>IdentityFile=%s</string>\n' "${identity_file}"
-        printf '%s\n' '        <string>-o</string>'
-        printf '%s\n' '        <string>IdentitiesOnly=yes</string>'
-        printf '%s\n' '        <string>-L</string>'
-        printf '        <string>%s</string>\n' "${local_forward_specification}"
-        printf '        <string>%s</string>\n' "${vnc_ssh_alias}"
+        for launch_agent_argument in "${launch_agent_arguments[@]}"; do
+            printf '        <string>%s</string>\n' \
+                "$(xml_escape "${launch_agent_argument}")"
+        done
         printf '%s\n' '    </array>'
         printf '%s\n' '    <key>RunAtLoad</key>'
         printf '%s\n' '    <true/>'
@@ -1565,9 +1554,9 @@ if [[ "${master_check_output}" != *"Master running"* ]]; then
         printf '%s\n' '    <key>ProcessType</key>'
         printf '%s\n' '    <string>Background</string>'
         printf '%s\n' '    <key>StandardOutPath</key>'
-        printf '    <string>%s</string>\n' "${launch_agent_stdout}"
+        printf '    <string>%s</string>\n' "$(xml_escape "${launch_agent_stdout}")"
         printf '%s\n' '    <key>StandardErrorPath</key>'
-        printf '    <string>%s</string>\n' "${launch_agent_stderr}"
+        printf '    <string>%s</string>\n' "$(xml_escape "${launch_agent_stderr}")"
         printf '%s\n' '</dict>'
         printf '%s\n' '</plist>'
     } > "${launch_agent_temporary_file}"
@@ -1585,7 +1574,8 @@ if [[ "${master_check_output}" != *"Master running"* ]]; then
 
     for _ in {1..30}; do
         master_check_output="$(
-            /usr/bin/ssh -S "${ssh_control_path}" -O check "${vnc_ssh_alias}" \
+            /usr/bin/ssh -F /dev/null -S "${ssh_control_path}" -O check \
+                "${vnc_ssh_target}" \
                 2>&1 || true
         )"
         if [[ "${master_check_output}" == *"Master running"* ]] &&
@@ -1611,11 +1601,11 @@ if [[ -z "${local_vnc_port}" ]]; then
     local_vnc_port="$(choose_local_vnc_port)" ||
         fail "no free local VNC port was found"
     log_message "Adding VNC forwarding to the existing SSH connection..."
-    /usr/bin/ssh \
+    /usr/bin/ssh -F /dev/null \
         -S "${ssh_control_path}" \
         -O forward \
         -L "127.0.0.1:${local_vnc_port}:127.0.0.1:${remote_vnc_port}" \
-        "${vnc_ssh_alias}" || fail "could not create the VNC tunnel"
+        "${vnc_ssh_target}" || fail "could not create the VNC tunnel"
     verify_new_vnc_forward=true
 fi
 listener_uses_ssh_master "${local_vnc_port}" ||
@@ -1635,11 +1625,11 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
             fail "local OpenCodex port ${local_opencodex_port} is already in use"
         log_message \
             "Adding OpenCodex forwarding on localhost:${local_opencodex_port}..."
-        /usr/bin/ssh \
+        /usr/bin/ssh -F /dev/null \
             -S "${ssh_control_path}" \
             -O forward \
             -L "${opencodex_forward_specification}" \
-            "${vnc_ssh_alias}" || fail "could not create the OpenCodex tunnel"
+            "${vnc_ssh_target}" || fail "could not create the OpenCodex tunnel"
     fi
     listener_uses_ssh_master "${local_opencodex_port}" ||
         fail "SSH did not listen on local OpenCodex port ${local_opencodex_port}"
@@ -1652,10 +1642,9 @@ else
 fi
 
 validation_record="$(
-    /usr/bin/ssh \
-        -o BatchMode=yes \
-        -o ConnectTimeout=15 \
-        "${vnc_ssh_alias}" \
+    /usr/bin/ssh "${vnc_ssh_connection_options[@]}" \
+        -S "${ssh_control_path}" \
+        "${vnc_ssh_target}" \
         /bin/bash -s -- \
         "${REMOTE_SHARED_ROOT}" "${active_environment_name}" \
         "${active_environment_mode}" <<'REMOTE_VALIDATE'
@@ -1756,11 +1745,10 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
         fail "the container cannot return to the Slurm-bound host shell"
 
     if ! pty_validation_record="$(
-        /usr/bin/ssh \
+        /usr/bin/ssh "${vnc_ssh_connection_options[@]}" \
             -tt \
-            -o BatchMode=yes \
-            -o ConnectTimeout=15 \
-            "${vnc_ssh_alias}" \
+            -S "${ssh_control_path}" \
+            "${vnc_ssh_target}" \
             'printf "TTY=%s\n" "$(tty)"' 2>&1 |
             tr -d '\r'
     )"; then
@@ -1776,6 +1764,7 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
     printf 'pwd\nquit\n' > "${sftp_batch_file}"
     if ! sftp_validation_record="$(
         /usr/bin/sftp \
+            -F /dev/null \
             -q -b "${sftp_batch_file}" \
             -o BatchMode=yes \
             -o ConnectTimeout=15 \
@@ -1784,7 +1773,10 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
             -o "HostKeyAlias=${vnc_host_key_alias}" \
             -o "IdentityFile=${identity_file}" \
             -o IdentitiesOnly=yes \
-            "${vnc_ssh_alias}" 2>&1
+            -o "ControlPath=${ssh_control_path}" \
+            -o "ProxyCommand=${login_proxy_command}" \
+            -o "Port=${remote_ssh_port}" \
+            "${vnc_ssh_target}" 2>&1
     )"; then
         unlink "${sftp_batch_file}"
         printf '%s\n' "${sftp_validation_record}" >&2
@@ -1801,6 +1793,15 @@ fi
 
 local_state_temporary_file="$(mktemp "${local_connection_state_file}.XXXXXX")"
 {
+    printf 'STATE_VERSION=2\n'
+    printf 'CLUSTER=%s\n' "${cluster_name}"
+    printf 'REMOTE_USER=%s\n' "${remote_user_name}"
+    printf 'LOGIN_HOST=%s\n' "${HOSTNAME}"
+    printf 'LOGIN_CONTROL_PATH=%s\n' "${login_control_path}"
+    printf 'SSH_CONTROL_PATH=%s\n' "${ssh_control_path}"
+    printf 'IDENTITY_FILE=%s\n' "${identity_file}"
+    printf 'KNOWN_HOSTS_FILE=%s\n' "${known_hosts_file}"
+    printf 'HOST_KEY_ALIAS=%s\n' "${vnc_host_key_alias}"
     printf 'JOB_ID=%s\n' "${vnc_job_id}"
     printf 'NODE=%s\n' "${vnc_node}"
     printf 'REMOTE_SSH_PORT=%s\n' "${remote_ssh_port}"
@@ -1843,7 +1844,7 @@ log_message \
     "CPUs=${actual_cpu_count} GPUs=${actual_gpu_count}" \
     "memory=${actual_memory} time=${actual_time_limit}"
 if [[ "${active_environment_mode}" == "mutable" ]]; then
-    log_message "Environment shell: ssh ${vnc_ssh_alias}"
+    log_message "Environment shell: ${vnc_ssh_alias}"
     log_message "Host shell from the container: bluehive-host-shell"
     log_message "Writable admin command: bh-admin"
     log_message "Container batch submission: sbatch SCRIPT [ARG ...]"
@@ -1864,7 +1865,7 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
     log_message \
         "OpenCodex dashboard: http://127.0.0.1:${local_opencodex_port}"
 else
-    log_message "Compute shell: ssh ${vnc_ssh_alias}"
+    log_message "Compute shell: ${vnc_ssh_alias}"
 fi
 log_message "VNC address: ${vnc_url}"
 log_message "Initial/fallback VNC geometry: ${active_vnc_geometry}"
