@@ -35,14 +35,17 @@
 
 ## 2. SSH 连接
 
-所有入口都使用完整主机名、明确的用户和项目管理的 ControlMaster，不读取
-或改写 `~/.ssh/config`。进入登录节点使用：
+所有入口都使用完整主机名、明确的用户和项目管理的 ControlMaster，无需
+手写 SSH 配置。连接后会自动更新 `~/.ssh/config` 顶部带标记的集群配置，
+备份并保留原有内容，让普通 `ssh` 和使用系统 OpenSSH 的 App 复用相同的
+连接。进入登录节点使用：
 
 ```bash
 ./cluster_ssh.sh --cluster bluehive3
 ```
 
-VNC 作业启动后，使用仓库自带的 `blhc3` 命令进入容器。
+VNC 作业启动后，使用 `blhc3` 或 `ssh blhc3` 进入容器。已有作业可以运行
+`./sync_ssh_config.sh -a bluehive3` 更新这些别名。
 
 ## 3. 一键部署远端工具
 

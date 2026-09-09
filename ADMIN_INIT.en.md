@@ -38,15 +38,17 @@ The historical four-line `user_password.txt` format remains supported.
 ## 2. SSH Connections
 
 Every entry point uses the full hostname, explicit user, and a project-managed
-ControlMaster. It neither reads nor rewrites `~/.ssh/config`. Open a login-node
-shell with:
+ControlMaster. No manual SSH configuration is required. After connecting, the
+scripts export a marked cluster block at the start of `~/.ssh/config`, preserving
+and backing up existing content. Ordinary SSH and apps using system OpenSSH can
+then reuse the same connection. Open a login-node shell with:
 
 ```bash
 ./cluster_ssh.sh --cluster bluehive3
 ```
 
-After a VNC job starts, use the repository's `blhc3` command to enter its
-container.
+After a VNC job starts, use `blhc3` or `ssh blhc3` to enter its container. Run
+`./sync_ssh_config.sh -a bluehive3` to refresh aliases for an existing job.
 
 ## 3. One-Command Remote Tool Deployment
 

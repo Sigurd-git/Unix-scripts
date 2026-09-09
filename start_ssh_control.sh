@@ -48,11 +48,18 @@ REMOTE_TOOLS_CONTROL_PATH="${SSH_CONTROL_PATH}"
 export CLUSTER HOSTNAME SSH_CONTROL_PATH SSH_LOGIN_TARGET
 export REMOTE_TOOLS_CONTROL_PATH
 
+sync_shared_ssh_aliases() {
+    bash "${current_path}/sync_ssh_config.sh" -a "${CLUSTER}" ||
+        printf 'Could not refresh standard SSH aliases; run sync_ssh_config.sh -a %s to retry.\n' \
+            "${CLUSTER}" >&2
+}
+
 control_status="$(
     /usr/bin/ssh -F /dev/null -S "${SSH_CONTROL_PATH}" -O check \
         "${SSH_LOGIN_TARGET}" 2>&1 || true
 )"
 if [[ "${control_status}" == *"Master running"* ]]; then
+    sync_shared_ssh_aliases
     echo "Reusing SSH session to ${CLUSTER}."
     return 0 2>/dev/null || exit 0
 fi
@@ -106,3 +113,4 @@ control_status="$(
     echo "Error: SSH control master did not start at ${SSH_CONTROL_PATH}" >&2
     exit 1
 }
+sync_shared_ssh_aliases

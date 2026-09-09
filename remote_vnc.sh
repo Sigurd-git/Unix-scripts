@@ -37,8 +37,8 @@ Usage: remote_vnc.sh [options]
 
 Start or reuse an independent VNC Slurm job. A mutable job starts OpenCodex,
 Codex app-server, and a public-key-only SSH service inside its persistent
-Apptainer environment. It creates the SSH and VNC tunnels without reading
-~/.ssh/config, then opens TigerVNC when installed. The blhc3 command opens Fish
+Apptainer environment. Connection settings come from the profile and job state;
+standard SSH aliases share the resulting tunnels. The blhc3 command opens Fish
 inside the container; bluehive-host-shell returns to the allocated host.
 
 The resource options match remote_sshd.sh. They apply when a new VNC job is
@@ -63,6 +63,7 @@ Options:
 
 After startup:
   blhc3
+  ssh blhc3
 
 Configuration:
   First use asks for the remote profile and can save it under ~/.config.
@@ -1838,13 +1839,16 @@ local_state_temporary_file="$(mktemp "${local_connection_state_file}.XXXXXX")"
 chmod 600 "${local_state_temporary_file}"
 mv "${local_state_temporary_file}" "${local_connection_state_file}"
 
+bash "${script_directory}/sync_ssh_config.sh" -a "${cluster_name}" ||
+    log_message "Could not refresh standard SSH aliases; run sync_ssh_config.sh -a ${cluster_name} to retry."
+
 vnc_url="vnc://127.0.0.1:${local_vnc_port}"
 log_message \
     "Job ${vnc_job_id}: node=${vnc_node} partition=${actual_partition}" \
     "CPUs=${actual_cpu_count} GPUs=${actual_gpu_count}" \
     "memory=${actual_memory} time=${actual_time_limit}"
 if [[ "${active_environment_mode}" == "mutable" ]]; then
-    log_message "Environment shell: ${vnc_ssh_alias}"
+    log_message "Environment shell: ${vnc_ssh_alias} or ssh ${vnc_ssh_alias}"
     log_message "Host shell from the container: bluehive-host-shell"
     log_message "Writable admin command: bh-admin"
     log_message "Container batch submission: sbatch SCRIPT [ARG ...]"

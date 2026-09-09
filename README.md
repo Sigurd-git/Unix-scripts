@@ -6,7 +6,7 @@ environments from macOS.
 ## Features
 
 - **Automatic Hostname Mapping**: Supports bluehive, bluehive3, and bhward clusters with automatic hostname resolution
-- **Zero SSH Config Setup**: Cluster entry points use explicit hosts and a managed OpenSSH control master; `~/.ssh/config` is not required
+- **Automatic SSH Config Setup**: Cluster entry points resolve their own connection settings and export standard SSH aliases so terminals and apps can share the same OpenSSH connection
 - **First-run Setup**: Prompts for the remote account and storage root, then optionally saves them
 - **Reusable Login Connection**: Reuses an OpenSSH control master, so a running connection does not request the login password again
 - **Slurm-aware Remote Access**: Starts VS Code/Cursor tunnels, Dropbear SSHD, or VNC inside separate Slurm jobs
@@ -30,16 +30,16 @@ All scripts automatically map cluster names to their full hostnames.
 
 For zsh:
 ```zsh
-git clone https://github.com/Sigurd-git/my_mac_scripts.git
-cd my_mac_scripts
+git clone https://github.com/Sigurd-git/Unix-scripts.git
+cd Unix-scripts
 printf 'export PATH="%s:$PATH"\n' "$PWD" >> ~/.zshrc
 source ~/.zshrc
 ```
 
 For bash:
 ```bash
-git clone https://github.com/Sigurd-git/my_mac_scripts.git
-cd my_mac_scripts
+git clone https://github.com/Sigurd-git/Unix-scripts.git
+cd Unix-scripts
 printf 'export PATH="%s:$PATH"\n' "$PWD" >> ~/.bashrc
 source ~/.bashrc
 ```
@@ -62,6 +62,20 @@ are optional. When no password is saved, OpenSSH asks for it as needed. The
 fixed VNC SSH port is derived from the username and saved automatically.
 Existing `user_password.txt` files continue to work and take precedence, so
 current installations do not need migration.
+
+After connecting, the scripts automatically maintain a marked cluster block at
+the start of `~/.ssh/config`. Existing content is preserved and backed up before
+changes. `ssh bluehive3`, `ssh blhc3`, and `ssh bluehive_compute3` then use the same
+ControlPath as the script's login and VNC connections. Apps using system OpenSSH
+can select these hosts and reuse the connection; clients with their own SSH
+implementation do not share OpenSSH control sockets. The script commands still
+connect with explicit options and do not require these aliases to exist.
+
+To refresh aliases for an already-running VNC job without restarting it:
+
+```bash
+./sync_ssh_config.sh -a bluehive3
+```
 
 ## Usage
 
@@ -598,8 +612,8 @@ Run any script with `--help` for its current defaults.
 ## Security Features
 
 - Saved profiles use mode `0600`; saving the password is optional.
-- Cluster SSH commands pass explicit connection parameters and do not read
-  `~/.ssh/config`.
+- Cluster SSH connections use explicit parameters. Generated SSH aliases share
+  these settings with other OpenSSH clients.
 - VNC listens on compute-node loopback and reaches the Mac through an SSH local forward.
 - TigerVNC keeps connection blacklisting enabled and requires `VncAuth`; its
   send/receive text clipboard parameters are checked before a job is marked ready.
