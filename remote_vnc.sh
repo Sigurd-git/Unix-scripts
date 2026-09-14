@@ -64,6 +64,8 @@ Options:
 After startup:
   blhc3
   ssh blhc3
+  blhc3 'slab'
+  blhc3 'sq'
 
 Configuration:
   First use asks for the remote profile and can save it under ~/.config.
@@ -281,7 +283,7 @@ configured_remote_ssh_port="${REMOTE_VNC_SSH_PORT}"
 [[ "${configured_remote_ssh_port}" =~ ^[0-9]+$ ]] &&
     ((configured_remote_ssh_port >= 44000 && configured_remote_ssh_port <= 44999)) ||
     fail "REMOTE_VNC_SSH_PORT must be between 44000 and 44999"
-managed_launcher_comment="remote-vnc-managed-v15:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
+managed_launcher_comment="remote-vnc-managed-v17:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
 
 CLUSTER="${cluster_name}"
 HOSTNAME="$(cluster_hostname "${cluster_name}")" || exit 1
@@ -606,7 +608,7 @@ environment_mode="${18}"
 environment_build_timeout_seconds="${19}"
 requested_remote_ssh_port="${20}"
 vnc_geometry="${21}"
-managed_launcher_version="15"
+managed_launcher_version="17"
 
 if [[ "${requested_node}" == "__REMOTE_VNC_SCHEDULER__" ]]; then
     requested_node=""
@@ -728,7 +730,7 @@ job_uses_managed_launcher() {
         tr ' ' '\n' <<< "${job_record}" |
             awk -F= '$1 == "Comment" { print $2; exit }'
     )"
-    [[ "${job_comment}" == remote-vnc-managed-v15:* ]]
+    [[ "${job_comment}" == remote-vnc-managed-v17:* ]]
 }
 
 managed_launcher_is_ready() {
@@ -802,14 +804,24 @@ opencodex_connection_is_ready() {
            ^[0-9]+$ ]]
 }
 
+read_job_queue_record() {
+    local requested_job_id="$1"
+
+    # Finished jobs may already be purged from Slurm. Query our queue so their
+    # absence is an empty result, while scheduler failures still reach stderr.
+    "${squeue_executable}" -h -u "${current_user}" -o '%i|%T|%N|%R' |
+        awk -F'|' -v requested_job_id="${requested_job_id}" '
+            $1 == requested_job_id { print $2 "|" $3 "|" $4 }
+        '
+}
+
 vnc_connection_is_ready() {
     local requested_job_id="$1"
+    local job_queue_record
     local job_state
 
-    job_state="$(
-        "${squeue_executable}" -h -j "${requested_job_id}" -o '%T' |
-            awk 'NF { print; exit }'
-    )"
+    job_queue_record="$(read_job_queue_record "${requested_job_id}")" || return
+    job_state="${job_queue_record%%|*}"
     [[ "$(read_state_value "${connection_file}" STATUS || true)" == "READY" ]] &&
         [[ "$(read_state_value "${connection_file}" JOB_ID || true)" == "${requested_job_id}" ]] &&
         [[ "$(read_state_value "${connection_file}" NODE || true)" =~ ^[A-Za-z0-9._-]+$ ]] &&
@@ -859,18 +871,12 @@ else
             "${scancel_executable}" "${job_id}"
             cancel_deadline=$((SECONDS + 60))
             while ((SECONDS < cancel_deadline)); do
-                if [[ -z "$(
-                    "${squeue_executable}" -h -j "${job_id}" -o '%i' |
-                        awk 'NF { print; exit }'
-                )" ]]; then
-                    break
-                fi
+                active_job_record="$(read_job_queue_record "${job_id}")"
+                [[ -n "${active_job_record}" ]] || break
                 sleep 1
             done
-            [[ -z "$(
-                "${squeue_executable}" -h -j "${job_id}" -o '%i' |
-                    awk 'NF { print; exit }'
-            )" ]] || {
+            active_job_record="$(read_job_queue_record "${job_id}")"
+            [[ -z "${active_job_record}" ]] || {
                 printf 'VNC Job %s did not stop within 60 seconds.\n' \
                     "${job_id}" >&2
                 exit 7
@@ -996,15 +1002,12 @@ else
 
     wait_deadline=$((
         SECONDS + image_build_timeout_seconds +
-        environment_build_timeout_seconds + startup_timeout_seconds
+        environment_build_timeout_seconds + startup_timeout_seconds + 900
     ))
     last_job_description=""
     last_launcher_stage=""
     while ((SECONDS < wait_deadline)); do
-        active_job_record="$(
-            "${squeue_executable}" -h -j "${job_id}" -o '%T|%N|%R' |
-                awk 'NF { print; exit }'
-        )"
+        active_job_record="$(read_job_queue_record "${job_id}")"
         [[ -n "${active_job_record}" ]] || {
             printf 'VNC Job %s left the queue before becoming ready.\n' \
                 "${job_id}" >&2
@@ -1036,6 +1039,9 @@ else
             reported_stage="${image_stage:-${launcher_stage}}"
         elif [[ "${launcher_stage}" == "PREPARING_ENVIRONMENT" ]]; then
             reported_stage="${environment_stage:-${launcher_stage}}"
+        elif [[ "${launcher_stage}" == "STARTING_VNC" && "${environment_mode}" == "mutable" ]]; then
+            service_stage="$(read_state_value "${user_service_directory}/state/jobs/${job_id}/opencodex/service.env" STATUS || true)"
+            [[ -n "${service_stage}" ]] && reported_stage="${service_stage}"
         fi
         if [[ "${reported_stage}" != "${last_launcher_stage}" ]]; then
             printf '[remote-vnc] Job %s stage=%s\n' \
@@ -1050,7 +1056,7 @@ else
     done
     vnc_connection_is_ready "${job_id}" || {
         printf 'Timed out after %s seconds waiting for VNC Job %s.\n' \
-            "$((image_build_timeout_seconds + environment_build_timeout_seconds + startup_timeout_seconds))" \
+            "$((image_build_timeout_seconds + environment_build_timeout_seconds + startup_timeout_seconds + 900))" \
             "${job_id}" >&2
         exit 5
     }
@@ -1246,6 +1252,15 @@ active_codex_app_server_status="$(
 active_codex_app_server_process_id="$(
     read_state_value "${connection_file}" CODEX_APP_SERVER_PID
 )"
+# Connection fields describe the original startup. Maintenance can replace the
+# AI processes while this same VNC connection and allocation remain usable.
+if [[ "${environment_mode}" == "mutable" ]]; then
+    service_state_file="${user_service_directory}/state/jobs/${job_id}/opencodex/service.env"
+    active_opencodex_status="$(read_state_value "${service_state_file}" OPENCODEX_STATUS || true)"
+    active_opencodex_process_id="$(read_state_value "${service_state_file}" OPENCODEX_PID || true)"
+    active_codex_app_server_status="$(read_state_value "${service_state_file}" CODEX_APP_SERVER_STATUS || true)"
+    active_codex_app_server_process_id="$(read_state_value "${service_state_file}" CODEX_APP_SERVER_PID || true)"
+fi
 [[ "${active_environment_name}" == "${environment_name}" &&
    "${active_environment_mode}" == "${environment_mode}" &&
    "${active_vnc_geometry}" == "${vnc_geometry}" ]] || {
@@ -1636,7 +1651,8 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
         fail "SSH did not listen on local OpenCodex port ${local_opencodex_port}"
     wait_for_local_opencodex_http "${local_opencodex_port}" || {
         tail -n 80 "${launch_agent_stderr}" >&2 2>/dev/null || true
-        fail "OpenCodex dashboard did not respond on localhost:${local_opencodex_port}"
+        active_opencodex_status="stopped"
+        log_message "OpenCodex is unavailable; VNC and SSH are ready. Run ocx start inside blhc3 to restore it."
     }
 else
     local_opencodex_port=""
@@ -1672,7 +1688,7 @@ if [[ "${environment_mode}" == "mutable" ]]; then
     for command_name in \
         fish gcc g++ node npm ocx codex uv pixi nvcc \
         google-chrome-stable chatgpt matlab mpm vncserver sshd \
-        bh-env bh-admin sbatch bluehive-host-shell; do
+        bh-env bh-admin bh-host sbatch squeue sinfo scontrol slab sq bluehive-host-shell; do
         command -v "${command_name}" >/dev/null
     done
     test -x /opt/matlab/R2025b/bin/matlab

@@ -57,6 +57,7 @@ codex_app_server_process_id=""
 container_instance_name=""
 container_instance_process_id=""
 opencodex_startup_timeout_seconds=120
+ai_update_timeout_seconds=900
 slurm_binary_directory=""
 host_path_prefix=""
 desktop_profile_source="${release_directory}/configure_desktop.sh"
@@ -954,7 +955,7 @@ if [[ "${environment_mode}" == "mutable" ]]; then
 
     opencodex_ready=false
     for ((attempt_number = 1;
-          attempt_number <= opencodex_startup_timeout_seconds + 120;
+          attempt_number <= opencodex_startup_timeout_seconds + 120 + ai_update_timeout_seconds;
           attempt_number++)); do
         if ! kill -0 "${opencodex_service_process_id}" 2>/dev/null; then
             opencodex_exit_status=0
@@ -977,7 +978,7 @@ if [[ "${environment_mode}" == "mutable" ]]; then
     done
     [[ "${opencodex_ready}" == "true" ]] || {
         printf 'OpenCodex did not become ready within %s seconds.\n' \
-            "$((opencodex_startup_timeout_seconds + 120))" >&2
+            "$((opencodex_startup_timeout_seconds + 120 + ai_update_timeout_seconds))" >&2
         sed -n '1,240p' "${opencodex_service_log_file}" >&2 || true
         exit 7
     }
@@ -1112,16 +1113,13 @@ fi
 
 while kill -0 "${vnc_process_id}" 2>/dev/null; do
     if [[ "${environment_mode}" == "mutable" ]] &&
+       [[ -n "${opencodex_service_process_id}" ]] &&
        ! kill -0 "${opencodex_service_process_id}" 2>/dev/null; then
         opencodex_exit_status=0
         wait "${opencodex_service_process_id}" || opencodex_exit_status=$?
         opencodex_service_process_id=""
-        printf 'OpenCodex service stopped with status %s.\n' \
+        printf 'AI service container stopped with status %s; keeping VNC and SSH running.\n' \
             "${opencodex_exit_status}" >&2
-        if [[ ${opencodex_exit_status} -eq 0 ]]; then
-            exit 7
-        fi
-        exit "${opencodex_exit_status}"
     fi
     sleep 5
 done

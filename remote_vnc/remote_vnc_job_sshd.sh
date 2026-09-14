@@ -203,6 +203,8 @@ write_container_ssh_files() {
     local current_group_name
     local temporary_group_file="${container_group_file}.tmp.$$"
     local slurm_variable_name
+    local slurm_executable_directory command_path command_name custom_command_names
+    local custom_command_directory="${container_ssh_host_directory}/custom-bin"
 
     [[ -x "${container_host_proxy_source}" ]] || {
         printf 'Container host proxy is missing: %s\n' \
@@ -216,6 +218,32 @@ write_container_ssh_files() {
     ln -sfn container-host-proxy "${container_command_host_directory}/bh-env"
     ln -sfn container-host-proxy "${container_command_host_directory}/bh-admin"
     ln -sfn container-host-proxy "${container_command_host_directory}/sbatch"
+    ln -sfn container-host-proxy "${container_command_host_directory}/bh-host"
+    install -m 0700 "${release_directory}/host_command.sh" \
+        "${container_ssh_host_directory}/host-command.sh"
+    slurm_executable_directory="$(dirname "$(bh_env_find_slurm_executable squeue)")"
+    for command_path in "${slurm_executable_directory}/"*; do
+        [[ -f "${command_path}" && -x "${command_path}" ]] || continue
+        command_name="$(basename "${command_path}")"
+        [[ "${command_name}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || continue
+        ln -sfn container-host-proxy "${container_command_host_directory}/${command_name}"
+    done
+    for command_name in slab sq; do
+        ln -sfn container-host-proxy "${container_command_host_directory}/${command_name}"
+    done
+    # Other custom commands follow native container programs in PATH.
+    mkdir -p "${custom_command_directory}"
+    custom_command_names="$("${container_ssh_host_directory}/host-command.sh" --list)" || return 1
+    while IFS= read -r command_name; do
+        [[ "${command_name}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || continue
+        case "${command_name}" in
+            act|swap_bluehive|revert_bluehive|bh-env|bh-admin|bh-host|sbatch|ocx|codex) continue ;;
+        esac
+        ln -sfn ../bin/container-host-proxy "${custom_command_directory}/${command_name}"
+    done <<< "${custom_command_names}"
+    mkdir -p "${environment_home}/.config/fish/conf.d"
+    install -m 0600 "${release_directory}/container_host_commands.fish" \
+        "${environment_home}/.config/fish/conf.d/remote-vnc-host-commands.fish"
 
     current_group_id="$(id -g)"
     current_group_name="$(id -gn)"
@@ -267,10 +295,10 @@ write_container_ssh_files() {
         printf 'export XDG_DATA_HOME=%q\n' "${container_home}/.local/share"
         printf 'export XDG_RUNTIME_DIR=%q\n' "${runtime_directory}"
         printf 'export LANG=C.UTF-8\n'
-        printf 'export TERM=%q\n' "${TERM:-xterm-256color}"
+        # sshd supplies TERM for each PTY; do not bake in the batch shell's TERM.
         printf 'export LD_LIBRARY_PATH=/.singularity.d/libs\n'
         printf 'export PATH=%q\n' \
-            "${container_command_directory}:${container_home}/.local/bin:/usr/local/cuda/bin:/opt/matlab/R2025b/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            "${container_command_directory}:${container_home}/.local/bin:/usr/local/cuda/bin:/opt/matlab/R2025b/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${container_ssh_directory}/custom-bin"
         printf 'export MLM_LICENSE_FILE=%q\n' \
             "${MLM_LICENSE_FILE:-/gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/licenses/network.lic}"
         for slurm_variable_name in \

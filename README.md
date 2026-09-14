@@ -383,8 +383,39 @@ After startup, connect directly to the mutable Apptainer environment:
 blhc3
 ```
 
-The login shell is Fish. Return to a Bash shell on the allocated compute host
-when modules or host-only programs are needed:
+The login shell is Fish. Slurm commands and the host's custom commands are
+available directly, without leaving the container:
+
+```bash
+slab
+sq
+squeue --me
+sinfo
+sacct
+tgz -o results.tar.gz results
+```
+
+Slurm commands use the job's private SSH backchannel to the compute host.
+`slab`, `sq`, and the `squeue` display format come from `~/commands.sh` on the
+host. Public functions, aliases, and executables in `~/bin` and `~/.local/bin`
+are discovered at startup. Existing native container tools take precedence over
+other host custom commands. The bridge preserves stdin, output, exit status,
+the working directory, and mapped home/shared-file paths. The existing `sbatch`
+wrapper continues to submit scripts inside the container environment.
+
+After adding a custom command, refresh its entry, or invoke any host command
+explicitly:
+
+```bash
+bh-host --refresh
+bh-host my-command argument
+```
+
+Definitions in `~/commands.sh` are read on each invocation. `act` activates
+`.venv/bin/activate.fish` in the current Fish shell. Aliases that change host
+module state (`swap_bluehive` and `revert_bluehive`) require a host shell;
+their changes cannot persist through a single forwarded command. Open that
+shell when needed:
 
 ```bash
 bluehive-host-shell
@@ -401,8 +432,8 @@ host modules and programs. The environment terminal and MATLAB launchers always
 enter the current environment generation.
 
 The environment includes Ubuntu development tools, Fish, GCC/G++, GFortran,
-CMake, Ninja, Git, SSH, screen, tmux, Node.js, npm, OpenCodex 2.39.0, Codex CLI
-0.150.1, uv, pixi, CUDA 12.5 development components, Google Chrome, the
+CMake, Ninja, Git, SSH, screen, tmux, Node.js, npm, OpenCodex, Codex CLI, uv,
+pixi, CUDA 12.5 development components, Google Chrome, the
 ChatGPT Linux desktop app, VNC/XFCE, MathWorks Package Manager (`mpm`), Noto
 CJK fonts for Chinese text, and MATLAB R2025b with:
 
@@ -515,13 +546,40 @@ blhc3 'printf "job=%s node=%s env=%s\n" "$SLURM_JOB_ID" "$(hostname -s)" "$BH_EN
 blhc3 "bluehive-host-shell 'type module; cat /proc/self/cgroup'"
 ```
 
-OpenCodex and Codex app-server start automatically with every mutable VNC job.
-Check them directly from the container SSH shell:
+Every new mutable VNC allocation checks OpenCodex and Codex for updates before
+starting its AI services. New versions are installed in the persistent home;
+current or newer installed versions are retained. OpenCodex uses a private npm
+prefix, and Codex retains its official standalone installation. A failed check
+or update aborts startup with a log path. Reconnecting to an existing job skips
+updates. The update stage has a separate 15-minute budget.
+
+Once ready, OpenCodex and the Codex daemon run independently inside the job.
+Stopping, updating, or restarting either service leaves VNC and SSH running,
+even if the service stays stopped indefinitely. Check them from the container
+SSH shell:
 
 ```bash
 blhc3 'ocx ready --json'
 blhc3 'codex app-server daemon version'
 ```
+
+Manage them without replacing the allocation:
+
+```bash
+blhc3 'ocx stop'
+blhc3 'ocx update'
+blhc3 'ocx start'                       # starts in the background
+blhc3 'ocx restart'
+blhc3 'codex update'
+blhc3 'codex app-server daemon restart'
+```
+
+`ocx update` and `codex update` use the same version checks as startup. After an
+update, start or restart the relevant service to load its new version. Update
+logs also persist at `~/.local/state/remote-vnc/ai-tools-update.log` inside the
+container. New behavior applies to newly started jobs; an existing job keeps
+the launcher it started with. Use `remote_vnc.sh --restart` with its desired
+resource options when ready to replace that allocation.
 
 The same managed SSH connection exposes the OpenCodex dashboard on the Mac:
 
@@ -530,13 +588,15 @@ http://127.0.0.1:10102
 ```
 
 The job SSH server permits forwarding only to the active loopback VNC and
-OpenCodex ports. `remote_vnc.sh` checks the dashboard over this tunnel before
-reporting startup success.
+OpenCodex ports. `remote_vnc.sh` checks the dashboard over this tunnel and
+reports when it is unavailable while still allowing access to VNC and SSH.
 
 The VNC desktop and service instance use the same sandbox and persistent HOME.
 The separate instance keeps the long-lived OpenCodex and app-server processes
 in one PID namespace. Direct container SSH sessions share their network and
-HOME, while host-side wrappers can still join the service instance.
+HOME. Host and container SSH commands for OpenCodex and Codex daemon management
+join the service instance through the job's host backchannel. Ordinary Codex
+terminal work stays in its caller's working directory.
 
 The first mutable launch copies the existing host configuration into that
 environment's private persistent home. This includes the current OpenCodex
@@ -558,8 +618,9 @@ used. The host terminal continues to use `$HOME/.codex` directly.
 Startup verifies the Apptainer instance, OpenCodex proxy, and Codex app-server
 PIDs against the VNC job's batch cgroup before marking the job ready. Service
 state and logs are in
-`users/${USER}/state/jobs/<slurm_job_id>/opencodex/`. If either service exits,
-the managed VNC job fails and records the reason there.
+`users/${USER}/state/jobs/<slurm_job_id>/opencodex/`. After startup, the monitor
+records stopped services and replacement PIDs without terminating the job.
+Daemon monitoring uses PID/cgroup checks rather than potentially busy RPCs.
 
 ### Automatic Illustrator Bundle Sync
 

@@ -1,103 +1,90 @@
 #!/usr/bin/env bash
 
-# Run on Linux: bash tests/test_remote_vnc_daemon_monitor.sh
-# Exercise the launcher's actual container command with a live fixture PID.
+# Exercise the production monitor with a virtual clock and job/PID fixtures.
 set -Eeuo pipefail
-
 repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture_directory="$(mktemp -d)"
 trap 'rm -rf "${fixture_directory}"' EXIT
-export TEST_CODEX_HOME="${fixture_directory}/codex"
-export TEST_COMMAND_LOG="${fixture_directory}/commands"
-export TEST_DAEMON_PID=$$
-mkdir -p "${TEST_CODEX_HOME}/app-server-daemon"
-printf '{}\n' > "${TEST_CODEX_HOME}/app-server-daemon/settings.json"
+export fixture_directory
 
-# Only substitute the home path; keep the production command and quoting intact.
-awk '
-    /^write_service_state "STARTING_CODEX_APP_SERVER"/ {armed=1}
-    armed && /^run_in_container \/bin\/bash -c / {copy=1}
-    copy && /^    >> / {exit}
-    copy {print}
-' "${repository_directory}/remote_vnc/start_opencodex.sh" |
-    sed -e 's/${CODEX_HOME}/${TEST_CODEX_HOME}/g' -e '$s/\\$//' \
-        > "${fixture_directory}/monitor.sh"
+awk '/^# The instance belongs to the allocation\./ {copy=1} copy {print}' \
+    "${repository_directory}/remote_vnc/start_opencodex.sh" > "${fixture_directory}/monitor.sh"
 [[ -s "${fixture_directory}/monitor.sh" ]]
 
-cat > "${fixture_directory}/codex-command" <<'MOCK_CODEX'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${TEST_COMMAND_LOG}"
-if [[ "$*" == "app-server daemon version" ]]; then
-    printf 'Error: timed out waiting for initialize response\n' >&2
-    exit 1
-fi
-MOCK_CODEX
-chmod +x "${fixture_directory}/codex-command"
-
-run_in_container() { "$@"; }
-
-# Mock only the Slurm cgroup lookup so the test also runs outside an allocation.
-grep() {
-    if [[ "$*" == "-Fq /job_900003/step_batch/ /proc/${TEST_DAEMON_PID}/cgroup" ]]; then
-        [[ "${TEST_SCENARIO}" != "wrong_job" ]]
+cat > "${fixture_directory}/fixture.sh" <<'FIXTURE'
+set -Eeuo pipefail
+service_instance_process_id=$$
+service_log_file="${fixture_directory}/service.log"
+app_server_pid_file="${fixture_directory}/daemon.pid"
+opencodex_process_id=101
+app_server_process_id=201
+opencodex_status=running
+app_server_status=running
+iteration=0
+process_belongs_to_job() { ((iteration < 35)); }
+instance_process_belongs_to_job() {
+    [[ "${scenario}" != wrong_job && ( "$1" == 102 || "$1" == 202 ) ]]
+}
+instance_process_cgroup_record() { printf 'fixture-job'; }
+read_json_integer() { jq -r --arg key "$2" '.[$key] // empty' <<< "$1" 2>/dev/null || true; }
+json_reports_true() { jq -e --arg key "$2" '.[$key] == true' <<< "$1" >/dev/null 2>&1; }
+read_opencodex_ready_record() {
+    if ((iteration >= 30)) && [[ "${scenario}" != stopped ]]; then
+        printf '{"ready":true,"pid":102,"port":10100}\n'
     else
-        command grep "$@"
+        printf '{"ready":false}\n'
     fi
 }
-
-# Advance the monitor clock instead of waiting a real minute. In the restart
-# case, briefly remove its PID record and then restore the live process.
+write_service_state() {
+    printf '%s|%s|%s|%s|%s\n' "$1" "${opencodex_status}" \
+        "${opencodex_process_id}" "${app_server_status}" "${app_server_process_id}" \
+        >> "${fixture_directory}/states"
+}
 sleep() {
+    iteration=$((iteration + 1))
     SECONDS=$((SECONDS + $1))
-    test_iteration=$((${test_iteration:-0} + 1))
-    if [[ "${TEST_SCENARIO}" == "restart" ]]; then
-        if ((test_iteration == 1)); then
-            printf '{}\n' > "${TEST_CODEX_HOME}/app-server-daemon/app-server.pid"
-        elif ((test_iteration == 4)); then
-            printf '{"pid":%s}\n' "${TEST_DAEMON_PID}" \
-                > "${TEST_CODEX_HOME}/app-server-daemon/app-server.pid"
-        fi
-    fi
-    if ((test_iteration >= 20)); then
-        exit 98 # Test harness stops a monitor that correctly remains running.
-    fi
-}
-export -f run_in_container grep sleep
-export managed_codex_executable="${fixture_directory}/codex-command"
-export app_server_restart_marker="${fixture_directory}/restarted"
-export job_id=900003
-
-check_monitor() {
-    export TEST_SCENARIO="$1"
-    local expected_status="$2"
-    local actual_status=0
-    : > "${TEST_COMMAND_LOG}"
-    if [[ "${TEST_SCENARIO}" == "missing" ]]; then
-        printf '{}\n' > "${TEST_CODEX_HOME}/app-server-daemon/app-server.pid"
+    if ((iteration >= 30)) && [[ "${scenario}" != stopped ]]; then
+        printf '{"pid":202}\n' > "${app_server_pid_file}"
     else
-        printf '{"pid":%s}\n' "${TEST_DAEMON_PID}" \
-            > "${TEST_CODEX_HOME}/app-server-daemon/app-server.pid"
+        printf '{}\n' > "${app_server_pid_file}"
     fi
-    bash "${fixture_directory}/monitor.sh" \
-        > "${fixture_directory}/stdout" 2> "${fixture_directory}/stderr" || actual_status=$?
-    if [[ "${actual_status}" -ne "${expected_status}" ]]; then
-        cat "${fixture_directory}/stderr" >&2
-        printf '%s: expected status %s, got %s\n' \
-            "${TEST_SCENARIO}" "${expected_status}" "${actual_status}" >&2
-        exit 1
-    fi
-    command grep -qx 'app-server daemon restart' "${TEST_COMMAND_LOG}"
-    ! command grep -q 'app-server daemon version' "${TEST_COMMAND_LOG}"
+    printf '%s\n' "${iteration}" > "${fixture_directory}/last-iteration"
 }
+source "${fixture_directory}/monitor.sh"
+FIXTURE
 
-check_monitor busy 98
-printf 'PASS: live daemon stays monitored without a potentially timing-out RPC query\n'
-check_monitor restart 98
-command grep -q 'process is running again' "${fixture_directory}/stdout"
-printf 'PASS: a temporary missing PID during restart recovers without stopping the desktop\n'
-check_monitor missing 1
-command grep -q 'after 60 seconds' "${fixture_directory}/stderr"
-printf 'PASS: a daemon that remains absent is reported after the restart grace period\n'
-check_monitor wrong_job 1
-command grep -q 'after 60 seconds' "${fixture_directory}/stderr"
-printf 'PASS: a live PID from another Slurm job is not accepted\n'
+for scenario in stopped restart wrong_job; do
+    : > "${fixture_directory}/states"
+    : > "${fixture_directory}/service.log"
+    actual_status=0
+    scenario="${scenario}" bash "${fixture_directory}/fixture.sh" \
+        > "${fixture_directory}/stdout" 2> "${fixture_directory}/stderr" || actual_status=$?
+    [[ "${actual_status}" == 6 ]]
+    [[ "$(cat "${fixture_directory}/last-iteration")" == 35 ]]
+    grep -qx 'READY|stopped||stopped|' "${fixture_directory}/states"
+    grep -q 'Apptainer service instance stopped' "${fixture_directory}/stderr"
+    if [[ "${scenario}" == restart ]]; then
+        grep -qx 'READY|running|102|running|202' "${fixture_directory}/states"
+    else
+        ! grep -q 'READY|running' "${fixture_directory}/states"
+    fi
+    printf 'PASS: %s AI services do not end the allocation; monitor follows replacement PIDs\n' "${scenario}"
+done
+
+# Even loss of the service supervisor must not tear down the VNC desktop.
+awk '/^while kill -0 "\$\{vnc_process_id\}"/ {copy=1} copy {print}' \
+    "${repository_directory}/remote_vnc/start_vnc.sh" > "${fixture_directory}/desktop.sh"
+(
+    environment_mode=mutable
+    opencodex_service_process_id=888888
+    vnc_process_id=999999
+    desktop_iterations=0
+    kill() { [[ "$2" == 999999 ]] && ((desktop_iterations < 20)); }
+    wait() { [[ "$1" == 999999 ]]; }
+    sleep() { desktop_iterations=$((desktop_iterations + 1)); }
+    source "${fixture_directory}/desktop.sh"
+    [[ "${desktop_iterations}" == 20 ]]
+    [[ -z "${opencodex_service_process_id}" ]]
+) 2> "${fixture_directory}/desktop.log"
+grep -q 'keeping VNC and SSH running' "${fixture_directory}/desktop.log"
+printf 'PASS: desktop survives loss of the AI service supervisor\n'

@@ -57,7 +57,71 @@ map_container_path_to_host() {
     esac
 }
 
+host_command_runner="${BH_ENV_HOST_PERSISTENT_HOME}/.local/state/remote-vnc/ssh/${SLURM_JOB_ID:?SLURM_JOB_ID is required}/host-command.sh"
+
+run_host_command() {
+    local host_working_directory remote_command argument mapped_argument
+    local -a remote_arguments
+
+    if ! host_working_directory="$(map_container_path_to_host "${PWD}")"; then
+        case "$1" in
+            slab|sq|squeue|sinfo|sacct|sprio|sstat|sshare|sdiag|sreport)
+                host_working_directory="${BH_ENV_HOST_HOME}"
+                ;;
+            *) fail "the current directory is container-only; use a directory under home, /bluehive-home, /gpfs, or /scratch" ;;
+        esac
+    fi
+    remote_arguments=("${host_command_runner}" "${host_working_directory}")
+    for argument in "$@"; do
+        if [[ "${argument}" == --*=/* ]]; then
+            mapped_argument="$(map_container_path_to_host "${argument#*=}" || true)"
+            [[ -z "${mapped_argument}" ]] || argument="${argument%%=*}=${mapped_argument}"
+        elif [[ "${argument}" == /* ]]; then
+            mapped_argument="$(map_container_path_to_host "${argument}" || true)"
+            [[ -z "${mapped_argument}" ]] || argument="${mapped_argument}"
+        fi
+        remote_arguments+=("${argument}")
+    done
+    printf -v remote_command '%q ' "${remote_arguments[@]}"
+    exec "${BH_ENV_HOST_SHELL}" "${remote_command% }"
+}
+
+refresh_host_commands() {
+    local remote_command command_names command_name command_link
+    local custom_bin="${BH_ENV_CONTAINER_HOME}/.local/state/remote-vnc/ssh/${SLURM_JOB_ID}/custom-bin"
+
+    printf -v remote_command '%q --list' "${host_command_runner}"
+    command_names="$("${BH_ENV_HOST_SHELL}" "${remote_command}")" ||
+        fail "could not discover the host's custom commands"
+    mkdir -p "${custom_bin}"
+    # Remove only links owned by this bridge, preserving user-installed files.
+    for command_link in "${custom_bin}/"*; do
+        [[ -L "${command_link}" ]] || continue
+        [[ "$(readlink "${command_link}")" == ../bin/container-host-proxy ]] || continue
+        rm -f -- "${command_link}"
+    done
+    while IFS= read -r command_name; do
+        [[ "${command_name}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || continue
+        case "${command_name}" in
+            act|swap_bluehive|revert_bluehive|bh-env|bh-admin|bh-host|sbatch|ocx|codex) continue ;;
+        esac
+        command_link="${custom_bin}/${command_name}"
+        [[ -e "${command_link}" || -L "${command_link}" ]] ||
+            ln -s ../bin/container-host-proxy "${command_link}"
+    done <<< "${command_names}"
+    printf 'Host custom commands refreshed from ~/commands.sh and personal bin directories.\n'
+}
+
 case "${proxy_name}" in
+    bh-host)
+        case "${1:-}" in
+            --refresh) refresh_host_commands ;;
+            -h|--help|"")
+                printf 'Usage: bh-host COMMAND [ARG ...]\n       bh-host --refresh\n'
+                ;;
+            *) run_host_command "$@" ;;
+        esac
+        ;;
     bh-env)
         run_host_bh_env "$@"
         ;;
@@ -86,6 +150,6 @@ case "${proxy_name}" in
             --env "${BH_ENV_NAME}" sbatch "${host_script_path}" "$@"
         ;;
     *)
-        fail "unsupported proxy name"
+        run_host_command "${proxy_name}" "$@"
         ;;
 esac

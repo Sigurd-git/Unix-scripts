@@ -39,9 +39,11 @@ Existing environments remain mutable through `bh-env admin`.
 `start_opencodex.sh` copies missing host OpenCodex/Codex settings, credentials,
 personal skills, plugins, memories, and imported skill sources into the private
 persistent container home on its first launch. It then creates a job-scoped
-Apptainer service instance and supervises `ocx start` and the Codex app-server
-daemon inside it. Host-side `ocx` and `codex` wrappers join this instance so all
-service commands share its PID namespace. `environment_common.sh` keeps
+Apptainer service instance. `update_ai_tools.sh` checks both release channels
+and installs updates in the persistent home before either AI service starts.
+`opencodex_command.sh` detaches `ocx start` inside that instance; the Codex daemon
+also runs independently. Host and container SSH wrappers route service commands
+into that instance so they share its PID namespace. `environment_common.sh` keeps
 OpenCodex configuration and app-server sockets private, but mounts the host
 Codex session directories, indexes, attachments, artifacts, and writer locks
 into every container and points `CODEX_SQLITE_HOME` to the host `.codex` state.
@@ -50,8 +52,18 @@ ready only after the instance, both services, and the host-session mounts pass
 their health and cgroup checks.
 After startup, the daemon monitor checks the PID file and Slurm cgroup without
 opening repeated RPC connections. A busy daemon can time out an RPC status
-query while its process is still running. A missing process gets 60 seconds to
-return during a restart before the launcher treats it as a service failure.
+query while its process is still running. Missing processes can remain stopped
+indefinitely for maintenance, and replacement PIDs refresh the service state.
+Neither AI service nor its supervisor exiting causes VNC/SSH to stop.
+
+`ocx stop`, `ocx start`, `ocx restart`, `ocx update`, `codex update`, and
+`codex app-server daemon restart` work from `blhc3`. The update commands use
+the same checks as startup; restart the affected service after updating.
+OpenCodex installs under `~/.local/share/remote-vnc/npm`; Codex keeps its
+`~/.codex/packages/standalone/current` layout. Checks and installs have bounded
+timeouts and a shared update lock. Failed updates abort initial startup and
+record their error in `~/.local/state/remote-vnc/ai-tools-update.log`. Updates
+run only for a new allocation or an explicit update command, not on reconnect.
 For mutable environments, `remote_vnc_job_sshd.sh` starts the public SSH server
 inside the read-only sandbox. `blhc3` therefore opens Fish directly in the
 container, while SFTP, VNC forwarding, and OpenCodex forwarding use the same
@@ -71,6 +83,18 @@ SFTP, VNC, and `http://127.0.0.1:10102` before reporting success. A private
 job-specific `/etc/group` view omits the unmapped `tty` group, allowing the
 non-root OpenSSH monitor to assign container PTYs to the user's mapped primary
 group.
+
+`remote_vnc_job_sshd.sh` also installs wrappers for Slurm executables, `slab`,
+and `sq`. `host_command.sh` loads the host's `~/commands.sh` and executes each
+command with its arguments and mapped working directory. Other public custom
+commands and personal executables are placed after native container commands
+in PATH. `bh-host --refresh` discovers newly added names; `bh-host COMMAND`
+provides explicit access. Directory mappings cover the persistent home,
+`/bluehive-home`, `/host`, and shared `/gpfs` and `/scratch` mounts. Read-only
+scheduler queries also work from container-only directories; file operations
+require a shared working directory. Fish's `act` helper activates the local
+virtual environment. The same bridge environment is available to container
+SSH, fresh `bh-env` shells, VNC terminals, and the AI service instance.
 
 The VNC launcher defaults to an initial `2560x1440`, accepts a validated
 geometry from the Mac launcher, and records it in both job and connection

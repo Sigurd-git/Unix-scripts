@@ -4,7 +4,7 @@ set -euo pipefail
 
 readonly MUTAGEN_BIN="/opt/homebrew/bin/mutagen"
 readonly SSH_BIN="/usr/bin/ssh"
-readonly REMOTE_HOST="blhc3"
+readonly REMOTE_HOST="bluehive3"
 readonly REMOTE_BUNDLE_ROOT="/scratch/snormanh_lab/shared/code/toydata/tmp"
 readonly LOCAL_BUNDLE_ROOT="/Users/gliao2/Downloads"
 readonly MANAGED_SESSION_LABEL="paper-ai-bundle-sync"

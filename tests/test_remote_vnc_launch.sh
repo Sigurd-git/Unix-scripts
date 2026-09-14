@@ -62,7 +62,7 @@ flock -u 9
 exec 9>&-
 expect_failure 42 run_job
 [[ -e "${TEST_IMAGE_MARKER}" ]]
-grep -q '^LAUNCHER_VERSION=15$' "${service_directory}/state/jobs/900001/managed-launcher.env"
+grep -q '^LAUNCHER_VERSION=17$' "${service_directory}/state/jobs/900001/managed-launcher.env"
 flock -n "${service_directory}/state/allocation.lock" true
 printf 'PASS: duplicate allocation rejected before image preparation; lock released on exit\n'
 
@@ -86,8 +86,8 @@ run_remote_start() {
         "${repository_directory}/remote_vnc/remote_vnc_job.sh" \
         "${release_directory}/remote_vnc_job_sshd.sh" \
         "${release_directory}/authorized_keys" \
-        remote-vnc-managed-v15:default:mutable:44422:2560x1440 \
-        false default mutable 1 44422 2560x1440
+        remote-vnc-managed-v17:default:mutable:44422:2560x1440 \
+        "${1:-false}" default mutable 1 44422 2560x1440
 }
 
 exec 8>"${service_directory}/state/launch.lock"
@@ -105,3 +105,78 @@ grep -q 'fixture app-server startup failure' "${fixture_directory}/stderr"
 [[ ! -s "${fixture_directory}/stdout" ]]
 flock -n "${service_directory}/state/launch.lock" true
 printf 'PASS: failed-job log reaches stderr instead of captured connection record\n'
+
+# Slurm rejects -j for purged jobs. A user queue query returns an empty result
+# for the same job, and still reports real scheduler failures.
+export TEST_QUEUE_MODE=empty
+export TEST_CANCEL_MARKER="${fixture_directory}/cancelled"
+cat > "${mock_binary_directory}/squeue" <<'MOCK_QUEUE'
+#!/usr/bin/env bash
+set -eu
+queue_format=""
+while (($#)); do
+    case "$1" in
+        -j|--jobs)
+            printf 'slurm_load_jobs error: Invalid job id specified\n' >&2
+            exit 1
+            ;;
+        -o) queue_format="$2"; shift ;;
+    esac
+    shift
+done
+case "${TEST_QUEUE_MODE}" in
+    failure)
+        printf 'Unable to contact slurm controller\n' >&2
+        exit 19
+        ;;
+    restart)
+        if [[ ! -e "${TEST_CANCEL_MARKER}" ]]; then
+            if [[ "${queue_format}" == '%i|%T|%j|%N|%R' ]]; then
+                printf '900010|RUNNING|%s-vnc|fixture-node|None\n' "$(id -un)"
+            else
+                printf '900010|RUNNING|fixture-node|None\n'
+            fi
+        fi
+        ;;
+    records)
+        printf '900009|PENDING||Resources\n900010|RUNNING|fixture-node|None\n'
+        ;;
+esac
+MOCK_QUEUE
+cat > "${mock_binary_directory}/scancel" <<'MOCK_CANCEL'
+#!/usr/bin/env bash
+[[ "$1" == 900010 ]] || exit 1
+touch "${TEST_CANCEL_MARKER}"
+MOCK_CANCEL
+
+printf 'STATUS=READY\nJOB_ID=900001\n' > "${service_directory}/state/connection.env"
+expect_failure 4 run_remote_start
+grep -q 'Submitted VNC Job 900002' "${fixture_directory}/stderr"
+grep -q 'left the queue before becoming ready' "${fixture_directory}/stderr"
+! grep -q 'Invalid job id' "${fixture_directory}/stderr"
+printf 'PASS: stale saved job and completed submitted job need no invalid-job lookup\n'
+
+TEST_QUEUE_MODE=restart
+expect_failure 4 run_remote_start true
+[[ -f "${TEST_CANCEL_MARKER}" ]]
+grep -q 'Cancelling VNC Job 900010' "${fixture_directory}/stderr"
+grep -q 'Submitted VNC Job 900002' "${fixture_directory}/stderr"
+! grep -q 'Invalid job id' "${fixture_directory}/stderr"
+printf 'PASS: restart observes cancellation without querying a purged job directly\n'
+
+TEST_QUEUE_MODE=failure
+expect_failure 19 run_remote_start
+grep -q 'Unable to contact slurm controller' "${fixture_directory}/stderr"
+! grep -q 'Submitted VNC Job' "${fixture_directory}/stderr"
+printf 'PASS: scheduler failure remains visible and prevents submission\n'
+
+awk '/^read_job_queue_record\(\)/ {copy=1} copy {print} copy && /^}$/ {exit}' \
+    "${fixture_directory}/remote-start.sh" > "${fixture_directory}/queue-query.sh"
+source "${fixture_directory}/queue-query.sh"
+squeue_executable="${mock_binary_directory}/squeue"
+current_user="$(id -un)"
+TEST_QUEUE_MODE=records
+[[ "$(read_job_queue_record 900010)" == 'RUNNING|fixture-node|None' ]]
+[[ "$(read_job_queue_record 900009)" == 'PENDING||Resources' ]]
+[[ -z "$(read_job_queue_record 900001)" ]]
+printf 'PASS: queue records select the requested job and preserve pending state\n'

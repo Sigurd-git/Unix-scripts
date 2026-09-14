@@ -16,7 +16,7 @@ environment_build_timeout_seconds="${10:-10800}"
 requested_remote_ssh_port="${11:?fixed remote SSH port is required}"
 vnc_geometry="${12:-2560x1440}"
 
-launcher_version="15"
+launcher_version="17"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${job_id}"
@@ -306,8 +306,11 @@ vnc_launcher_process_id=$!
 write_launcher_state "STARTING_VNC"
 
 vnc_ready=false
+# Updates run inside the allocation, before AI services become ready.
+ai_update_timeout_seconds=0
+[[ "${environment_mode}" == "mutable" ]] && ai_update_timeout_seconds=900
 for ((attempt_number = 1;
-      attempt_number <= startup_timeout_seconds;
+      attempt_number <= startup_timeout_seconds + ai_update_timeout_seconds;
       attempt_number++)); do
     if ! kill -0 "${vnc_launcher_process_id}" 2>/dev/null; then
         vnc_exit_status=0
@@ -336,7 +339,7 @@ for ((attempt_number = 1;
 done
 [[ "${vnc_ready}" == "true" ]] || {
     printf 'VNC did not become ready within %s seconds.\n' \
-        "${startup_timeout_seconds}" >&2
+        "$((startup_timeout_seconds + ai_update_timeout_seconds))" >&2
     exit 3
 }
 

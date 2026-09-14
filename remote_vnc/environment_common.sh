@@ -240,6 +240,11 @@ bh_env_append_runtime_options() {
         --env "USER=${current_user}"
         --env "LOGNAME=${current_user}"
         --env "BH_ENV_ACTIVE=1"
+        --env "BH_ENV_HOST_HOME=${host_home}"
+        --env "BH_ENV_HOST_PERSISTENT_HOME=${persistent_home}"
+        --env "BH_ENV_CONTAINER_HOME=${container_home}"
+        --env "BH_ENV_HOST_SHELL=${container_home}/.local/bin/bluehive-host-shell"
+        --env "BH_ENV_HOST_COMMAND=${host_home}/.local/bin/bh-env"
         --env "CODEX_HOME=${container_codex_home}"
         --env "CODEX_SQLITE_HOME=/bluehive-home/.codex"
         --env "XDG_CONFIG_HOME=${container_home}/.config"
@@ -248,7 +253,7 @@ bh_env_append_runtime_options() {
         --env "XDG_RUNTIME_DIR=${runtime_directory}"
         --env "LANG=C.UTF-8"
         --env "TERM=${TERM:-xterm-256color}"
-        --env "PATH=/usr/local/cuda/bin:/opt/matlab/R2025b/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        --env "PATH=${container_home}/.local/state/remote-vnc/ssh/${SLURM_JOB_ID:-outside}/bin:${container_home}/.local/bin:/usr/local/cuda/bin:/opt/matlab/R2025b/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${container_home}/.local/state/remote-vnc/ssh/${SLURM_JOB_ID:-outside}/custom-bin"
         --env "MLM_LICENSE_FILE=${MLM_LICENSE_FILE:-/gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/licenses/network.lic}"
     )
     [[ -n "${display_value}" ]] &&
