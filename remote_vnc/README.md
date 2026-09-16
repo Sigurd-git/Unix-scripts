@@ -41,7 +41,7 @@ personal skills, plugins, memories, and imported skill sources into the private
 persistent container home on its first launch. It then creates a job-scoped
 Apptainer service instance. `update_ai_tools.sh` checks both release channels
 and installs updates in the persistent home before either AI service starts.
-`opencodex_command.sh` detaches `ocx start` inside that instance; the Codex daemon
+`opencodex_supervisor.sh` owns `ocx start` inside that instance; the Codex daemon
 also runs independently. Host and container SSH wrappers route service commands
 into that instance so they share its PID namespace. `environment_common.sh` keeps
 OpenCodex configuration and app-server sockets private, but mounts the host
@@ -55,10 +55,40 @@ opening repeated RPC connections. A busy daemon can time out an RPC status
 query while its process is still running. Missing processes can remain stopped
 indefinitely for maintenance, and replacement PIDs refresh the service state.
 Neither AI service nor its supervisor exiting causes VNC/SSH to stop.
+The job starts `opencodex_supervisor.sh` as an independent service process. It
+owns the OpenCodex lifecycle, writes `supervisor.log` and `supervisor.env`, and
+restarts an unexpected exit with bounded exponential backoff. `ocx stop` pauses
+the desired state, while `ocx restart` and `ocx update` coordinate with the
+supervisor so maintenance does not race an automatic restart.
+
+`start_opencodex.sh` runs that supervisor as the foreground process of its own
+`apptainer exec` session and keeps the session for the job's lifetime, which is
+also how the Codex app-server launcher works. The service instance runs with
+`--fakeroot`, and the `faked` daemon behind `FAKEROOTKEY` lives only as long as
+the session that started it. A process detached from its session keeps
+`LD_PRELOAD=libfakeroot.so` bound to a dead daemon, so the next call that needs
+it blocks in `semop()` forever: a `nohup`-style supervisor produced an empty
+`opencodex.log` and never started the proxy. Anything long-lived inside the
+instance therefore needs a session that outlives it.
+
+The Codex app-server daemon detaches by design, so it runs without that
+fakeroot preload instead. Its control socket and PID records live in the
+persistent environment home and name processes from a container that died with
+its allocation, so startup clears them first; otherwise the daemon reports
+"control socket is already in use" or "failed to read start time". The daemon
+opens its SQLite state on shared storage before it binds the socket, which can
+outlast one `daemon restart` readiness wait, so startup retries the restart for
+up to 240 seconds before it reports failure.
+
+Initial OpenCodex startup allows up to 600 seconds for the first model and
+Codex state synchronization. The outer VNC launchers include this window before
+they report a startup failure; later unexpected exits use the supervisor's
+bounded restart backoff.
 
 `ocx stop`, `ocx start`, `ocx restart`, `ocx update`, `codex update`, and
 `codex app-server daemon restart` work from `blhc3`. The update commands use
-the same checks as startup; restart the affected service after updating.
+the same checks as startup; `ocx update` stops the supervisor-managed process,
+updates the package, and starts it again before returning.
 OpenCodex installs under `~/.local/share/remote-vnc/npm`; Codex keeps its
 `~/.codex/packages/standalone/current` layout. Checks and installs have bounded
 timeouts and a shared update lock. Failed updates abort initial startup and

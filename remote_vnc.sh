@@ -16,6 +16,7 @@ root_override=""
 open_vnc_viewer=true
 restart_existing_job=false
 startup_timeout_seconds=300
+opencodex_startup_timeout_seconds=600
 image_build_timeout_seconds=1800
 environment_build_timeout_seconds=10800
 environment_name="default"
@@ -283,7 +284,7 @@ configured_remote_ssh_port="${REMOTE_VNC_SSH_PORT}"
 [[ "${configured_remote_ssh_port}" =~ ^[0-9]+$ ]] &&
     ((configured_remote_ssh_port >= 44000 && configured_remote_ssh_port <= 44999)) ||
     fail "REMOTE_VNC_SSH_PORT must be between 44000 and 44999"
-managed_launcher_comment="remote-vnc-managed-v17:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
+managed_launcher_comment="remote-vnc-managed-v18:${environment_name}:${environment_mode}:${configured_remote_ssh_port}:${vnc_geometry}"
 
 CLUSTER="${cluster_name}"
 HOSTNAME="$(cluster_hostname "${cluster_name}")" || exit 1
@@ -584,7 +585,8 @@ ready_record="$(
         "${environment_mode}" \
         "${environment_build_timeout_seconds}" \
         "${configured_remote_ssh_port}" \
-        "${vnc_geometry}" <<'REMOTE_START'
+        "${vnc_geometry}" \
+        "${opencodex_startup_timeout_seconds}" <<'REMOTE_START'
 set -Eeuo pipefail
 
 release_directory="$1"
@@ -609,6 +611,7 @@ environment_build_timeout_seconds="${19}"
 requested_remote_ssh_port="${20}"
 vnc_geometry="${21}"
 compatible_launcher_versions="17, 18"
+opencodex_startup_timeout_seconds="${22:-600}"
 
 if [[ "${requested_node}" == "__REMOTE_VNC_SCHEDULER__" ]]; then
     requested_node=""
@@ -984,7 +987,7 @@ else
 
         mkdir -p "${user_service_directory}/logs"
         printf -v job_wrap_command \
-            'exec %q %q %q %q %q %q %q %q %q %q %q %q %q' \
+            'exec %q %q %q %q %q %q %q %q %q %q %q %q %q %q' \
             "${remote_job_launcher_file}" \
             "${release_directory}" \
             "${user_service_directory}" \
@@ -997,7 +1000,8 @@ else
             "${environment_mode}" \
             "${environment_build_timeout_seconds}" \
             "${requested_remote_ssh_port}" \
-            "${vnc_geometry}"
+            "${vnc_geometry}" \
+            "${opencodex_startup_timeout_seconds}"
         job_id="$(
             "${sbatch_executable}" "${submit_options[@]}" \
                 --wrap="${job_wrap_command}"
@@ -1012,7 +1016,8 @@ else
 
     wait_deadline=$((
         SECONDS + image_build_timeout_seconds +
-        environment_build_timeout_seconds + startup_timeout_seconds + 900
+        environment_build_timeout_seconds + startup_timeout_seconds +
+        opencodex_startup_timeout_seconds + 120 + 900
     ))
     last_job_description=""
     last_launcher_stage=""
@@ -1066,7 +1071,7 @@ else
     done
     vnc_connection_is_ready "${job_id}" || {
         printf 'Timed out after %s seconds waiting for VNC Job %s.\n' \
-            "$((image_build_timeout_seconds + environment_build_timeout_seconds + startup_timeout_seconds + 900))" \
+            "$((image_build_timeout_seconds + environment_build_timeout_seconds + startup_timeout_seconds + opencodex_startup_timeout_seconds + 120 + 900))" \
             "${job_id}" >&2
         exit 5
     }

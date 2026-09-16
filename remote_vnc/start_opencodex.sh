@@ -8,7 +8,7 @@ user_service_directory="${2:?user service directory is required}"
 environment_rootfs="${3:?environment rootfs is required}"
 environment_home="${4:?environment home is required}"
 environment_name="${5:?environment name is required}"
-startup_timeout_seconds="${6:-120}"
+startup_timeout_seconds="${6:-600}"
 
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 current_user="$(id -un)"
@@ -21,6 +21,22 @@ service_directory="${job_state_directory}/opencodex"
 service_state_file="${service_directory}/service.env"
 service_log_file="${service_directory}/service.log"
 opencodex_log_file="${service_directory}/opencodex.log"
+opencodex_supervisor_script="${release_directory}/opencodex_supervisor.sh"
+opencodex_supervisor_log_file="${service_directory}/supervisor.log"
+opencodex_supervisor_state_file="${service_directory}/supervisor.env"
+opencodex_supervisor_control_directory="${service_directory}/supervisor"
+opencodex_supervisor_pid_file="${opencodex_supervisor_control_directory}/supervisor.pid"
+opencodex_supervisor_poll_interval_seconds=2
+opencodex_supervisor_initial_backoff_seconds=2
+opencodex_supervisor_maximum_backoff_seconds=60
+opencodex_supervisor_stable_runtime_seconds=60
+opencodex_supervisor_probe_timeout_seconds=30
+opencodex_supervisor_readiness_refresh_seconds=30
+opencodex_supervisor_publish_timeout_seconds=60
+# XDG_RUNTIME_DIR and the container /tmp bind both come from this path, so it
+# has to resolve to the same location inside the instance. A node-local path
+# does not: only its tmp subdirectory is bound, and the services see a
+# runtime directory that is not there.
 runtime_directory="${service_directory}/runtime"
 environment_common_helpers="${release_directory}/environment_common.sh"
 container_codex_home="${container_home}/.codex"
@@ -30,6 +46,17 @@ container_codex_standalone_directory="${container_codex_home}/packages/standalon
 managed_codex_executable="${container_codex_standalone_directory}/current/bin/codex"
 opencodex_npm_prefix="${container_home}/.local/share/remote-vnc/npm"
 managed_opencodex_executable="${opencodex_npm_prefix}/bin/ocx"
+opencodex_listen_port=10100
+if [[ -r "${environment_home}/.opencodex/config.json" ]]; then
+    configured_opencodex_port="$(
+        sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+            "${environment_home}/.opencodex/config.json" | head -n 1
+    )"
+    if [[ "${configured_opencodex_port}" =~ ^[1-9][0-9]*$ ]] &&
+       (( configured_opencodex_port <= 65535 )); then
+        opencodex_listen_port="${configured_opencodex_port}"
+    fi
+fi
 container_command_path="${opencodex_npm_prefix}/bin:${container_codex_standalone_directory}/current/bin:${container_home}/.local/state/remote-vnc/ssh/${job_id}/bin:${container_home}/.local/bin:/usr/local/cuda/bin:/opt/matlab/R2025b/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${container_home}/.local/state/remote-vnc/ssh/${job_id}/custom-bin"
 service_instance_name="remote-vnc-${current_user}-${job_id}"
 service_instance_uri="instance://${service_instance_name}"
@@ -41,6 +68,10 @@ opencodex_process_id=""
 opencodex_status="NOT_STARTED"
 opencodex_process_cgroup="unavailable"
 opencodex_port=""
+opencodex_supervisor_launcher_process_id=""
+opencodex_supervisor_process_id=""
+opencodex_supervisor_status="NOT_STARTED"
+opencodex_supervisor_process_cgroup="unavailable"
 app_server_launcher_process_id=""
 app_server_process_id=""
 app_server_process_cgroup="unavailable"
@@ -56,7 +87,7 @@ migration_status="NOT_STARTED"
 }
 for required_path in \
     "${environment_rootfs}" "${environment_home}" \
-    "${environment_common_helpers}"; do
+    "${environment_common_helpers}" "${opencodex_supervisor_script}"; do
     [[ -e "${required_path}" ]] || {
         printf 'Required OpenCodex path is missing: %s\n' \
             "${required_path}" >&2
@@ -65,6 +96,11 @@ for required_path in \
 done
 [[ -x "${environment_common_helpers}" ]] || {
     printf 'Required OpenCodex launcher is not executable.\n' >&2
+    exit 2
+}
+[[ -x "${opencodex_supervisor_script}" ]] || {
+    printf 'OpenCodex supervisor is not executable: %s\n' \
+        "${opencodex_supervisor_script}" >&2
     exit 2
 }
 
@@ -81,10 +117,14 @@ bh_env_load_apptainer || {
 }
 apptainer_executable="$(command -v apptainer)"
 
-mkdir -p "${service_directory}" "${runtime_directory}"
-chmod 700 "${service_directory}" "${runtime_directory}"
-touch "${service_log_file}" "${opencodex_log_file}"
-chmod 600 "${service_log_file}" "${opencodex_log_file}"
+mkdir -p "${service_directory}" "${runtime_directory}" \
+    "${opencodex_supervisor_control_directory}"
+chmod 700 "${service_directory}" "${runtime_directory}" \
+    "${opencodex_supervisor_control_directory}"
+touch "${service_log_file}" "${opencodex_log_file}" \
+    "${opencodex_supervisor_log_file}"
+chmod 600 "${service_log_file}" "${opencodex_log_file}" \
+    "${opencodex_supervisor_log_file}"
 
 container_start_options=()
 bh_env_append_runtime_options \
@@ -95,6 +135,13 @@ container_start_options+=(
     --env "BH_ENV_SERVICE_INSTANCE=${service_instance_name}"
     --env "npm_config_prefix=${opencodex_npm_prefix}"
     --env "PATH=${container_command_path}"
+    --env "BH_ENV_OPENCODEX_SUPERVISOR_SCRIPT=${opencodex_supervisor_script}"
+    --env "BH_ENV_OPENCODEX_SUPERVISOR_LOG=${opencodex_supervisor_log_file}"
+    --env "BH_ENV_OPENCODEX_SUPERVISOR_STATE=${opencodex_supervisor_state_file}"
+    --env "BH_ENV_OPENCODEX_SUPERVISOR_CONTROL=${opencodex_supervisor_control_directory}"
+    --env "BH_ENV_OPENCODEX_SUPERVISOR_PID_FILE=${opencodex_supervisor_pid_file}"
+    --env "BH_ENV_OPENCODEX_SUPERVISOR_STARTUP_TIMEOUT=${startup_timeout_seconds}"
+    --env "BH_ENV_OPENCODEX_PORT=${opencodex_listen_port}"
 )
 instance_start_options=("${container_start_options[@]:1}")
 instance_exec_options=(exec --cleanenv)
@@ -172,6 +219,141 @@ instance_process_cgroup_record() {
     printf '%s' "${process_cgroup:-unavailable}"
 }
 
+read_supervisor_state_value() {
+    local requested_key="$1"
+
+    [[ -s "${opencodex_supervisor_state_file}" ]] || return 1
+    awk -F= -v requested_key="${requested_key}" '
+        $1 == requested_key {
+            sub(/^[^=]*=/, "")
+            print
+            exit
+        }
+    ' "${opencodex_supervisor_state_file}"
+}
+
+# Apptainer runs this environment through its fakeroot helper, and the faked
+# daemon behind FAKEROOTKEY lives exactly as long as the apptainer session that
+# started it. A process detached from that session keeps
+# LD_PRELOAD=libfakeroot.so bound to a dead daemon and blocks forever in
+# semop() the first time it needs one, which leaves no output at all. The
+# supervisor therefore runs as the foreground process of its own session, like
+# the Codex app-server launcher, and this script owns that session.
+supervisor_session_is_running() {
+    [[ "${opencodex_supervisor_launcher_process_id}" =~ ^[0-9]+$ ]] &&
+        kill -0 "${opencodex_supervisor_launcher_process_id}" 2>/dev/null
+}
+
+start_opencodex_supervisor() {
+    local publish_deadline
+    local candidate_process_id
+
+    supervisor_session_is_running && return 0
+    [[ "${service_instance_started}" == "true" ]] || return 1
+
+    rm -f "${opencodex_supervisor_state_file}" \
+        "${opencodex_supervisor_pid_file}"
+    "${apptainer_executable}" "${instance_exec_options[@]}" \
+        "${service_instance_uri}" "${opencodex_supervisor_script}" \
+        "${managed_opencodex_executable}" "${opencodex_log_file}" \
+        "${opencodex_supervisor_log_file}" \
+        "${opencodex_supervisor_control_directory}" \
+        "${opencodex_supervisor_state_file}" \
+        "${opencodex_supervisor_pid_file}" \
+        "${startup_timeout_seconds}" \
+        "${opencodex_supervisor_poll_interval_seconds}" \
+        "${opencodex_supervisor_initial_backoff_seconds}" \
+        "${opencodex_supervisor_maximum_backoff_seconds}" \
+        "${opencodex_supervisor_stable_runtime_seconds}" \
+        "${opencodex_supervisor_probe_timeout_seconds}" \
+        "${opencodex_supervisor_readiness_refresh_seconds}" \
+        </dev/null >> "${opencodex_supervisor_log_file}" 2>&1 &
+    opencodex_supervisor_launcher_process_id=$!
+
+    publish_deadline=$((
+        SECONDS + opencodex_supervisor_publish_timeout_seconds
+    ))
+    while (( SECONDS < publish_deadline )); do
+        candidate_process_id="$(
+            read_supervisor_state_value SUPERVISOR_PID || true
+        )"
+        if [[ "${candidate_process_id}" =~ ^[0-9]+$ ]]; then
+            opencodex_supervisor_process_id="${candidate_process_id}"
+            opencodex_supervisor_status="starting"
+            opencodex_supervisor_process_cgroup="$(
+                instance_process_cgroup_record \
+                    "${opencodex_supervisor_process_id}"
+            )"
+            return 0
+        fi
+        supervisor_session_is_running || break
+        sleep 1
+    done
+    printf 'OpenCodex supervisor did not publish its state within %s seconds. Log: %s\n' \
+        "${opencodex_supervisor_publish_timeout_seconds}" \
+        "${opencodex_supervisor_log_file}" >&2
+    return 1
+}
+
+wait_for_opencodex_supervisor() {
+    local supervisor_deadline=$((SECONDS + startup_timeout_seconds))
+    local candidate_process_id
+    local candidate_port
+    local candidate_status
+
+    while (( SECONDS < supervisor_deadline )); do
+        candidate_status="$(read_supervisor_state_value STATUS || true)"
+        candidate_process_id="$(read_supervisor_state_value PID || true)"
+        candidate_port="$(read_supervisor_state_value PORT || true)"
+        if [[ "${candidate_status}" == "running" &&
+              "${candidate_process_id}" =~ ^[0-9]+$ &&
+              "${candidate_port}" =~ ^[0-9]+$ ]] &&
+           instance_process_belongs_to_job "${candidate_process_id}"; then
+            opencodex_process_id="${candidate_process_id}"
+            opencodex_port="${candidate_port}"
+            opencodex_status="running"
+            opencodex_supervisor_status="running"
+            return 0
+        fi
+        if ! supervisor_session_is_running; then
+            printf 'OpenCodex supervisor exited before becoming ready. Log: %s\n' \
+                "${opencodex_supervisor_log_file}" >&2
+            return 1
+        fi
+        sleep 1
+    done
+    printf 'OpenCodex supervisor did not become ready within %s seconds. Log: %s\n' \
+        "${startup_timeout_seconds}" "${opencodex_supervisor_log_file}" >&2
+    return 1
+}
+
+stop_opencodex_supervisor() {
+    local wait_deadline
+
+    if supervisor_session_is_running; then
+        kill -TERM "${opencodex_supervisor_launcher_process_id}" 2>/dev/null ||
+            true
+        wait_deadline=$((SECONDS + 45))
+        while supervisor_session_is_running &&
+              (( SECONDS < wait_deadline )); do
+            sleep 1
+        done
+        if supervisor_session_is_running; then
+            kill -KILL "${opencodex_supervisor_launcher_process_id}" \
+                2>/dev/null || true
+        fi
+        wait "${opencodex_supervisor_launcher_process_id}" 2>/dev/null || true
+    fi
+    opencodex_supervisor_launcher_process_id=""
+
+    if instance_process_belongs_to_job "${opencodex_process_id}"; then
+        timeout 15 "${apptainer_executable}" "${instance_exec_options[@]}" \
+            "${service_instance_uri}" "${managed_opencodex_executable}" stop \
+            >> "${service_log_file}" 2>&1 || true
+    fi
+    opencodex_supervisor_status="stopped"
+}
+
 write_service_state() {
     local status_value="$1"
     local temporary_state_file="${service_state_file}.tmp.$$"
@@ -199,6 +381,18 @@ write_service_state() {
         printf 'OPENCODEX_PORT=%s\n' "${opencodex_port}"
         printf 'OPENCODEX_LOG=%s\n' "${opencodex_log_file}"
         printf 'OPENCODEX_CGROUP=%s\n' "${opencodex_process_cgroup}"
+        printf 'OPENCODEX_SUPERVISOR_LAUNCHER_PID=%s\n' \
+            "${opencodex_supervisor_launcher_process_id}"
+        printf 'OPENCODEX_SUPERVISOR_PID=%s\n' \
+            "${opencodex_supervisor_process_id}"
+        printf 'OPENCODEX_SUPERVISOR_STATUS=%s\n' \
+            "${opencodex_supervisor_status}"
+        printf 'OPENCODEX_SUPERVISOR_LOG=%s\n' \
+            "${opencodex_supervisor_log_file}"
+        printf 'OPENCODEX_SUPERVISOR_STATE=%s\n' \
+            "${opencodex_supervisor_state_file}"
+        printf 'OPENCODEX_SUPERVISOR_CGROUP=%s\n' \
+            "${opencodex_supervisor_process_cgroup}"
         printf 'CODEX_APP_SERVER_STATUS=%s\n' "${app_server_status}"
         printf 'CODEX_APP_SERVER_LAUNCHER_PID=%s\n' \
             "${app_server_launcher_process_id}"
@@ -226,17 +420,12 @@ cleanup() {
     local exit_status=$?
 
     trap - EXIT INT TERM
+    stop_opencodex_supervisor || true
     if instance_process_belongs_to_job "${app_server_process_id}"; then
         timeout 15 \
             "${apptainer_executable}" "${instance_exec_options[@]}" \
             "${service_instance_uri}" \
             "${managed_codex_executable}" app-server daemon stop \
-            >> "${service_log_file}" 2>&1 || true
-    fi
-    if instance_process_belongs_to_job "${opencodex_process_id}"; then
-        timeout 15 \
-            "${apptainer_executable}" "${instance_exec_options[@]}" \
-            "${service_instance_uri}" "${managed_opencodex_executable}" stop \
             >> "${service_log_file}" 2>&1 || true
     fi
     for launcher_process_id in "${app_server_launcher_process_id}"; do
@@ -512,7 +701,7 @@ write_container_wrapper "${environment_home}/.local/bin/ocx" \
 write_service_state "CHECKING_COMMANDS"
 run_in_container /bin/bash -c '
     set -Eeuo pipefail
-    for command_name in node npm ocx codex jq; do
+    for command_name in node npm ocx codex jq flock timeout; do
         command -v "${command_name}" >/dev/null
     done
     [[ "$(command -v codex)" == "$1" ]]
@@ -525,21 +714,6 @@ run_in_container "${managed_opencodex_executable}" --version \
 run_in_container "${managed_codex_executable}" --version \
     >> "${service_log_file}" 2>&1
 
-read_opencodex_ready_record() {
-    timeout 10 "${apptainer_executable}" "${instance_exec_options[@]}" \
-        "${service_instance_uri}" "${managed_opencodex_executable}" \
-        ready --json 2>/dev/null || true
-}
-
-json_reports_true() {
-    local json_record="$1"
-    local field_name="$2"
-
-    grep -Eq \
-        "\"${field_name}\"[[:space:]]*:[[:space:]]*true" \
-        <<< "${json_record}"
-}
-
 read_json_integer() {
     local json_record="$1"
     local field_name="$2"
@@ -549,40 +723,17 @@ read_json_integer() {
         <<< "${json_record}" | head -n 1
 }
 
-ready_record="$(read_opencodex_ready_record)"
-if json_reports_true "${ready_record}" ready; then
-    opencodex_process_id="$(read_json_integer "${ready_record}" pid)"
-    opencodex_port="$(read_json_integer "${ready_record}" port)"
-    instance_process_belongs_to_job "${opencodex_process_id}" || {
-        printf 'OpenCodex PID %s is outside Slurm Job %s.\n' \
-            "${opencodex_process_id:-unknown}" "${job_id}" >&2
-        exit 4
-    }
-else
-    write_service_state "STARTING_OPENCODEX"
-    run_in_container "${release_directory}/opencodex_command.sh" \
-        "${managed_opencodex_executable}" "${managed_codex_executable}" \
-        "${opencodex_log_file}" start >> "${service_log_file}" 2>&1 || {
-        printf 'OpenCodex failed to start. Log: %s\n' "${opencodex_log_file}" >&2
-        exit 4
-    }
-
-    startup_deadline=$((SECONDS + startup_timeout_seconds))
-    while ((SECONDS < startup_deadline)); do
-        ready_record="$(read_opencodex_ready_record)"
-        if json_reports_true "${ready_record}" ready; then
-            break
-        fi
-        sleep 1
-    done
-    json_reports_true "${ready_record}" ready || {
-        printf 'OpenCodex did not become ready within %s seconds. Log: %s\n' \
-            "${startup_timeout_seconds}" "${opencodex_log_file}" >&2
-        exit 4
-    }
-    opencodex_process_id="$(read_json_integer "${ready_record}" pid)"
-    opencodex_port="$(read_json_integer "${ready_record}" port)"
-fi
+write_service_state "STARTING_OPENCODEX_SUPERVISOR"
+start_opencodex_supervisor || {
+    printf 'OpenCodex supervisor failed to start. Log: %s\n' \
+        "${opencodex_supervisor_log_file}" >&2
+    exit 4
+}
+wait_for_opencodex_supervisor || {
+    printf 'OpenCodex supervisor did not start OpenCodex. Log: %s\n' \
+        "${opencodex_supervisor_log_file}" >&2
+    exit 4
+}
 
 [[ "${opencodex_port}" =~ ^[0-9]+$ ]] || {
     printf 'OpenCodex returned an invalid port: %s\n' \
@@ -599,27 +750,65 @@ opencodex_process_cgroup="$(
 )"
 opencodex_status="running"
 
+app_server_pid_file="${persistent_codex_home}/app-server-daemon/app-server.pid"
+app_server_updater_pid_file="${persistent_codex_home}/app-server-daemon/app-server-updater.pid"
+app_server_control_socket="${persistent_codex_home}/app-server-control/app-server-control.sock"
+app_server_startup_timeout_seconds=240
+
 write_service_state "STARTING_CODEX_APP_SERVER"
+# The control socket and the daemon's PID records live in the persistent
+# environment home, but every process they name belonged to a container that
+# died with its allocation. A leftover socket makes bind() report "control
+# socket is already in use", and a leftover PID record makes `daemon restart`
+# fail with "failed to read start time for pid-managed app server". This
+# instance is new and the launcher runs one managed VNC job at a time, so any
+# record still present predates this allocation.
+for stale_daemon_record in \
+    "${app_server_control_socket}" "${app_server_pid_file}" \
+    "${app_server_updater_pid_file}"; do
+    [[ -e "${stale_daemon_record}" ]] || continue
+    printf '%s Removing app-server state left by an earlier allocation: %s\n' \
+        "$(date --iso-8601=seconds)" "${stale_daemon_record}" \
+        >> "${service_log_file}"
+    rm -f "${stale_daemon_record}"
+done
 rm -f "${app_server_restart_marker}"
 run_in_container /bin/bash -c '
         set -Eeuo pipefail
         managed_codex="$1"
         restart_marker="$2"
+        startup_timeout="$3"
+        # The managed daemon detaches by design, so it cannot hold an apptainer
+        # session open the way the OpenCodex supervisor does. Drop the fakeroot
+        # preload for it: this instance already maps the user to root, while a
+        # detached process that keeps libfakeroot bound to the dead faked
+        # daemon of a finished session blocks in semop() before it can create
+        # the control socket.
+        unset LD_PRELOAD FAKEROOTKEY FAKED_MODE FAKEROOTDONTTRYCHOWN
         if [[ ! -s "${CODEX_HOME}/app-server-daemon/settings.json" ]]; then
             "${managed_codex}" app-server daemon bootstrap --remote-control
         fi
-        "${managed_codex}" app-server daemon restart
+        # The app server opens its SQLite state on shared storage before it
+        # binds the control socket, and that first open can outlast the daemon
+        # command own readiness wait. Retry inside this window rather than
+        # failing the allocation: restart also retires a half-started server,
+        # so the socket is not left reported as in use.
+        restart_deadline=$((SECONDS + startup_timeout))
+        until "${managed_codex}" app-server daemon restart; do
+            (( SECONDS < restart_deadline )) || exit 1
+            sleep 5
+        done
         temporary_restart_marker="${restart_marker}.tmp.$$"
         printf "READY\n" > "${temporary_restart_marker}"
         mv "${temporary_restart_marker}" "${restart_marker}"
     ' -- "${managed_codex_executable}" "${app_server_restart_marker}" \
+        "${app_server_startup_timeout_seconds}" \
     >> "${service_log_file}" 2>&1 &
 app_server_launcher_process_id=$!
 
-app_server_pid_file="${persistent_codex_home}/app-server-daemon/app-server.pid"
-app_server_updater_pid_file="${persistent_codex_home}/app-server-daemon/app-server-updater.pid"
-app_server_control_socket="${persistent_codex_home}/app-server-control/app-server-control.sock"
-for ((attempt_number = 1; attempt_number <= 60; attempt_number++)); do
+for ((attempt_number = 1;
+      attempt_number <= app_server_startup_timeout_seconds + 120;
+      attempt_number++)); do
     if [[ ! -s "${app_server_restart_marker}" ]] &&
        ! kill -0 "${app_server_launcher_process_id}" 2>/dev/null; then
         printf 'Codex app-server launcher exited before becoming ready. Log: %s\n' \
@@ -670,16 +859,56 @@ printf 'OPENCODEX_READY job=%s node=%s instance=%s port=%s proxy_pid=%s app_serv
 while process_belongs_to_job "${service_instance_process_id}" &&
       kill -0 "${service_instance_process_id}" 2>/dev/null; do
     sleep 5
-    previous_service_record="${opencodex_status}|${opencodex_process_id}|${app_server_status}|${app_server_process_id}"
-    ready_record="$(read_opencodex_ready_record)"
-    opencodex_process_id="$(read_json_integer "${ready_record}" pid)"
+    previous_service_record="${opencodex_supervisor_status}|${opencodex_supervisor_process_id}|${opencodex_status}|${opencodex_process_id}|${app_server_status}|${app_server_process_id}"
+
+    if ! supervisor_session_is_running; then
+        printf '%s OpenCodex supervisor stopped; restarting it inside the service instance.\n' \
+            "$(date --iso-8601=seconds)" >> "${service_log_file}"
+        if [[ "${opencodex_supervisor_launcher_process_id}" =~ ^[0-9]+$ ]]; then
+            wait "${opencodex_supervisor_launcher_process_id}" 2>/dev/null ||
+                true
+            opencodex_supervisor_launcher_process_id=""
+        fi
+        if start_opencodex_supervisor; then
+            opencodex_supervisor_status="starting"
+        else
+            opencodex_supervisor_process_id=""
+            opencodex_supervisor_status="stopped"
+            opencodex_supervisor_process_cgroup="unavailable"
+        fi
+    fi
+
+    supervisor_state_status="$(read_supervisor_state_value STATUS || true)"
+    supervisor_state_pid="$(read_supervisor_state_value SUPERVISOR_PID || true)"
+    if supervisor_session_is_running &&
+       [[ "${supervisor_state_pid}" =~ ^[0-9]+$ &&
+          "${supervisor_state_pid}" != "${opencodex_supervisor_process_id}" ]]; then
+        opencodex_supervisor_process_id="${supervisor_state_pid}"
+        opencodex_supervisor_process_cgroup="$(
+            instance_process_cgroup_record "${opencodex_supervisor_process_id}"
+        )"
+    fi
+    if supervisor_session_is_running; then
+        opencodex_supervisor_status="${supervisor_state_status:-starting}"
+    else
+        opencodex_supervisor_status="stopped"
+    fi
+
+    candidate_opencodex_process_id="$(read_supervisor_state_value PID || true)"
+    candidate_opencodex_port="$(read_supervisor_state_value PORT || true)"
     opencodex_status="stopped"
-    if json_reports_true "${ready_record}" ready &&
-       instance_process_belongs_to_job "${opencodex_process_id}"; then
+    if [[ "${opencodex_supervisor_status}" == "running" &&
+          "${candidate_opencodex_process_id}" =~ ^[0-9]+$ &&
+          "${candidate_opencodex_port}" =~ ^[0-9]+$ ]] &&
+       instance_process_belongs_to_job "${candidate_opencodex_process_id}"; then
+        opencodex_process_id="${candidate_opencodex_process_id}"
+        opencodex_port="${candidate_opencodex_port}"
         opencodex_status="running"
     else
         opencodex_process_id=""
+        opencodex_port=""
     fi
+
     app_server_process_id="$(
         read_json_integer "$(head -n 1 "${app_server_pid_file}" 2>/dev/null || true)" pid
     )"
@@ -689,14 +918,15 @@ while process_belongs_to_job "${service_instance_process_id}" &&
     else
         app_server_process_id=""
     fi
-    current_service_record="${opencodex_status}|${opencodex_process_id}|${app_server_status}|${app_server_process_id}"
+    current_service_record="${opencodex_supervisor_status}|${opencodex_supervisor_process_id}|${opencodex_status}|${opencodex_process_id}|${app_server_status}|${app_server_process_id}"
     if [[ "${current_service_record}" != "${previous_service_record}" ]]; then
         opencodex_process_cgroup="$(instance_process_cgroup_record "${opencodex_process_id}")"
         app_server_process_cgroup="$(instance_process_cgroup_record "${app_server_process_id}")"
-        printf '%s AI services: OpenCodex=%s PID=%s; Codex daemon=%s PID=%s. VNC job remains running.\n' \
-            "$(date --iso-8601=seconds)" "${opencodex_status}" \
-            "${opencodex_process_id:-none}" "${app_server_status}" \
-            "${app_server_process_id:-none}" >> "${service_log_file}"
+        printf '%s AI services: OpenCodex supervisor=%s PID=%s; OpenCodex=%s PID=%s port=%s; Codex daemon=%s PID=%s. VNC job remains running.\n' \
+            "$(date --iso-8601=seconds)" "${opencodex_supervisor_status}" \
+            "${opencodex_supervisor_process_id:-none}" "${opencodex_status}" \
+            "${opencodex_process_id:-none}" "${opencodex_port:-none}" \
+            "${app_server_status}" "${app_server_process_id:-none}" >> "${service_log_file}"
         write_service_state "READY"
     fi
 done

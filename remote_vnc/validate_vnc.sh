@@ -53,6 +53,18 @@ opencodex_status="$(read_connection_value OPENCODEX_STATUS)"
 opencodex_process_id="$(read_connection_value OPENCODEX_PID)"
 opencodex_port="$(read_connection_value OPENCODEX_PORT)"
 opencodex_log_file="$(read_connection_value OPENCODEX_LOG)"
+opencodex_supervisor_status="$(
+    read_connection_value OPENCODEX_SUPERVISOR_STATUS
+)"
+opencodex_supervisor_process_id="$(
+    read_connection_value OPENCODEX_SUPERVISOR_PID
+)"
+opencodex_supervisor_log_file="$(
+    read_connection_value OPENCODEX_SUPERVISOR_LOG
+)"
+opencodex_supervisor_state_file="$(
+    read_connection_value OPENCODEX_SUPERVISOR_STATE
+)"
 opencodex_migration_status="$(read_connection_value OPENCODEX_MIGRATION_STATUS)"
 codex_home_directory="$(read_connection_value CODEX_HOME)"
 codex_sqlite_home_directory="$(read_connection_value CODEX_SQLITE_HOME)"
@@ -120,6 +132,13 @@ if [[ "${environment_mode}" == "mutable" ]]; then
             "${opencodex_port:-not set}" >&2
         exit 3
     }
+    [[ "${opencodex_supervisor_status}" == "running" &&
+       "${opencodex_supervisor_process_id}" =~ ^[0-9]+$ ]] || {
+        printf 'OpenCodex supervisor state is invalid: status=%s PID=%s\n' \
+            "${opencodex_supervisor_status:-not set}" \
+            "${opencodex_supervisor_process_id:-not set}" >&2
+        exit 3
+    }
     [[ "${codex_app_server_status}" == "running" &&
        "${codex_app_server_process_id}" =~ ^[0-9]+$ ]] || {
         printf 'Codex app-server state is invalid: status=%s PID=%s\n' \
@@ -148,6 +167,15 @@ if [[ "${environment_mode}" == "mutable" ]]; then
             "${opencodex_log_file:-not set}" >&2
         exit 3
     }
+    for supervisor_file in \
+        "${opencodex_supervisor_log_file}" \
+        "${opencodex_supervisor_state_file}"; do
+        [[ -e "${supervisor_file}" ]] || {
+            printf 'OpenCodex supervisor file is missing: %s\n' \
+                "${supervisor_file:-not set}" >&2
+            exit 3
+        }
+    done
 else
     [[ "${opencodex_status}" == "DISABLED_IMMUTABLE" ]] || {
         printf 'Immutable OpenCodex status is invalid: %s\n' \
@@ -424,6 +452,9 @@ printf 'Container service instance: %s (host PID %s)\n' \
 printf 'OpenCodex: %s (PID %s, port %s)\n' \
     "${opencodex_status}" "${opencodex_process_id:-not set}" \
     "${opencodex_port:-not set}"
+printf 'OpenCodex supervisor: %s (PID %s)\n' \
+    "${opencodex_supervisor_status:-not set}" \
+    "${opencodex_supervisor_process_id:-not set}"
 printf 'OpenCodex settings migration: %s\n' \
     "${opencodex_migration_status:-not set}"
 printf 'Codex session sharing: %s (%s)\n' \

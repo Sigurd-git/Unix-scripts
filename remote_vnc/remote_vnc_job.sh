@@ -15,8 +15,9 @@ environment_mode="${9:-mutable}"
 environment_build_timeout_seconds="${10:-10800}"
 requested_remote_ssh_port="${11:?fixed remote SSH port is required}"
 vnc_geometry="${12:-2560x1440}"
+opencodex_startup_timeout_seconds="${13:-600}"
 
-launcher_version="17"
+launcher_version="18"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${job_id}"
@@ -42,7 +43,8 @@ remote_ssh_launcher_process_id=""
 
 for timeout_value in \
     "${startup_timeout_seconds}" "${image_build_timeout_seconds}" \
-    "${environment_build_timeout_seconds}"; do
+    "${environment_build_timeout_seconds}" \
+    "${opencodex_startup_timeout_seconds}"; do
     [[ "${timeout_value}" =~ ^[1-9][0-9]*$ ]] || {
         printf 'Invalid startup timeout: %s\n' "${timeout_value}" >&2
         exit 2
@@ -301,7 +303,8 @@ write_launcher_state "STARTING_VNC"
     "${environment_mode}" \
     "${environment_home}" \
     "${environment_generation}" \
-    "${vnc_geometry}" &
+    "${vnc_geometry}" \
+    "${opencodex_startup_timeout_seconds}" &
 vnc_launcher_process_id=$!
 write_launcher_state "STARTING_VNC"
 
@@ -310,7 +313,8 @@ vnc_ready=false
 ai_update_timeout_seconds=0
 [[ "${environment_mode}" == "mutable" ]] && ai_update_timeout_seconds=900
 for ((attempt_number = 1;
-      attempt_number <= startup_timeout_seconds + ai_update_timeout_seconds;
+      attempt_number <= startup_timeout_seconds +
+          opencodex_startup_timeout_seconds + 120 + ai_update_timeout_seconds;
       attempt_number++)); do
     if ! kill -0 "${vnc_launcher_process_id}" 2>/dev/null; then
         vnc_exit_status=0
@@ -339,7 +343,7 @@ for ((attempt_number = 1;
 done
 [[ "${vnc_ready}" == "true" ]] || {
     printf 'VNC did not become ready within %s seconds.\n' \
-        "$((startup_timeout_seconds + ai_update_timeout_seconds))" >&2
+        "$((startup_timeout_seconds + opencodex_startup_timeout_seconds + 120 + ai_update_timeout_seconds))" >&2
     exit 3
 }
 

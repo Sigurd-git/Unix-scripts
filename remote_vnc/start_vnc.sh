@@ -11,6 +11,7 @@ environment_mode="${5:-immutable}"
 requested_session_home="${6:-}"
 environment_generation="${7:-base-image}"
 vnc_geometry="${8:-2560x1440}"
+opencodex_startup_timeout_seconds="${9:-600}"
 job_id="${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 current_user="$(id -un)"
 host_home="${HOME:?HOME is required}"
@@ -47,6 +48,10 @@ opencodex_status="DISABLED_IMMUTABLE"
 opencodex_process_id=""
 opencodex_port=""
 opencodex_log_file=""
+opencodex_supervisor_status="DISABLED_IMMUTABLE"
+opencodex_supervisor_process_id=""
+opencodex_supervisor_log_file=""
+opencodex_supervisor_state_file=""
 opencodex_migration_status="NOT_RUN"
 codex_home_directory=""
 codex_sqlite_home_directory="${host_codex_home}"
@@ -56,7 +61,6 @@ codex_app_server_status="NOT_RUN"
 codex_app_server_process_id=""
 container_instance_name=""
 container_instance_process_id=""
-opencodex_startup_timeout_seconds=120
 ai_update_timeout_seconds=900
 slurm_binary_directory=""
 host_path_prefix=""
@@ -993,6 +997,22 @@ if [[ "${environment_mode}" == "mutable" ]]; then
     opencodex_log_file="$(
         read_state_value "${opencodex_service_state_file}" OPENCODEX_LOG
     )"
+    opencodex_supervisor_status="$(
+        read_state_value \
+            "${opencodex_service_state_file}" OPENCODEX_SUPERVISOR_STATUS
+    )"
+    opencodex_supervisor_process_id="$(
+        read_state_value \
+            "${opencodex_service_state_file}" OPENCODEX_SUPERVISOR_PID
+    )"
+    opencodex_supervisor_log_file="$(
+        read_state_value \
+            "${opencodex_service_state_file}" OPENCODEX_SUPERVISOR_LOG
+    )"
+    opencodex_supervisor_state_file="$(
+        read_state_value \
+            "${opencodex_service_state_file}" OPENCODEX_SUPERVISOR_STATE
+    )"
     opencodex_migration_status="$(
         read_state_value "${opencodex_service_state_file}" MIGRATION_STATUS
     )"
@@ -1026,6 +1046,8 @@ if [[ "${environment_mode}" == "mutable" ]]; then
     )"
     [[ "${opencodex_process_id}" =~ ^[0-9]+$ &&
        "${opencodex_port}" =~ ^[0-9]+$ &&
+       "${opencodex_supervisor_status}" == "running" &&
+       "${opencodex_supervisor_process_id}" =~ ^[0-9]+$ &&
        "${codex_app_server_status}" == "running" &&
        "${codex_app_server_process_id}" =~ ^[0-9]+$ &&
        "${container_instance_name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ &&
@@ -1076,6 +1098,14 @@ connection_temporary_file="${connection_file}.tmp.${job_id}"
     printf 'OPENCODEX_PID=%s\n' "${opencodex_process_id}"
     printf 'OPENCODEX_PORT=%s\n' "${opencodex_port}"
     printf 'OPENCODEX_LOG=%s\n' "${opencodex_log_file}"
+    printf 'OPENCODEX_SUPERVISOR_STATUS=%s\n' \
+        "${opencodex_supervisor_status}"
+    printf 'OPENCODEX_SUPERVISOR_PID=%s\n' \
+        "${opencodex_supervisor_process_id}"
+    printf 'OPENCODEX_SUPERVISOR_LOG=%s\n' \
+        "${opencodex_supervisor_log_file}"
+    printf 'OPENCODEX_SUPERVISOR_STATE=%s\n' \
+        "${opencodex_supervisor_state_file}"
     printf 'OPENCODEX_MIGRATION_STATUS=%s\n' \
         "${opencodex_migration_status}"
     printf 'CODEX_HOME=%s\n' "${codex_home_directory}"
@@ -1107,6 +1137,9 @@ if [[ "${environment_mode}" == "mutable" ]]; then
         "${container_instance_name}" "${container_instance_process_id}"
     printf 'OpenCodex: ready on port %s (PID %s)\n' \
         "${opencodex_port}" "${opencodex_process_id}"
+    printf 'OpenCodex supervisor: %s (PID %s)\n' \
+        "${opencodex_supervisor_status}" \
+        "${opencodex_supervisor_process_id}"
     printf 'Codex app server: %s (PID %s)\n' \
         "${codex_app_server_status}" "${codex_app_server_process_id}"
 fi
