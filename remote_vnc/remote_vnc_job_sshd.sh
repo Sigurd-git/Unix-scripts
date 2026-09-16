@@ -161,9 +161,14 @@ recorded_persistent_server_key_public="$(
     exit 2
 }
 
+# `getent ahostsv4` prints one line per socket type, so an awk that exits at
+# the first address can close the pipe while getent is still writing. Under
+# `pipefail` that SIGPIPE would fail SSH startup for an address that resolved
+# correctly, so resolve first and match after.
+resolved_node_addresses="$(getent ahostsv4 "${expected_node}")"
 node_ipv4_address="$(
-    getent ahostsv4 "${expected_node}" |
-        awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $1; exit }'
+    awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $1; exit }' \
+        <<< "${resolved_node_addresses}"
 )"
 [[ "${node_ipv4_address}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
     printf 'Could not resolve an IPv4 address for %s.\n' "${expected_node}" >&2

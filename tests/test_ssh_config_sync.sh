@@ -17,15 +17,23 @@ ssh_config_value() {
     local ssh_config_file="$1"
     local host_alias="$2"
     local option_name="$3"
+    local rendered_configuration
 
-    "${ssh_binary}" -G -F "${ssh_config_file}" "${host_alias}" 2>/dev/null |
-        awk -v option_name="${option_name}" '
-            $1 == option_name {
-                sub(/^[^[:space:]]+[[:space:]]+/, "")
-                print
-                exit
-            }
-        '
+    # `ssh -G` prints every effective option, and the requested one is usually
+    # near the top, so an awk that exits at the first match closes the pipe
+    # while ssh is still writing. Under `pipefail` that SIGPIPE fails the
+    # assertion even though the value was read correctly. Render the options
+    # first, then match them.
+    rendered_configuration="$(
+        "${ssh_binary}" -G -F "${ssh_config_file}" "${host_alias}" 2>/dev/null
+    )"
+    awk -v option_name="${option_name}" '
+        $1 == option_name {
+            sub(/^[^[:space:]]+[[:space:]]+/, "")
+            print
+            exit
+        }
+    ' <<< "${rendered_configuration}"
 }
 
 assert_ssh_config_value() {
