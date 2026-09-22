@@ -608,7 +608,7 @@ environment_mode="${18}"
 environment_build_timeout_seconds="${19}"
 requested_remote_ssh_port="${20}"
 vnc_geometry="${21}"
-managed_launcher_version="17"
+compatible_launcher_versions="17, 18"
 
 if [[ "${requested_node}" == "__REMOTE_VNC_SCHEDULER__" ]]; then
     requested_node=""
@@ -709,18 +709,25 @@ managed_launcher_state_file() {
         "${user_service_directory}" "${requested_job_id}"
 }
 
+launcher_version_is_compatible() {
+    # v18 adds startup timeout controls; its connection state matches v17.
+    [[ "$1" == 17 || "$1" == 18 ]]
+}
+
 job_uses_managed_launcher() {
     local requested_job_id="$1"
     local launcher_state_file
     local job_record
     local job_comment
+    local existing_launcher_version
 
     launcher_state_file="$(managed_launcher_state_file "${requested_job_id}")"
-    if [[ "$(read_state_value "${launcher_state_file}" LAUNCHER_VERSION || true)" == \
-          "${managed_launcher_version}" ]] &&
-       [[ "$(read_state_value "${launcher_state_file}" JOB_ID || true)" == \
-          "${requested_job_id}" ]]; then
-        return 0
+    existing_launcher_version="$(read_state_value "${launcher_state_file}" LAUNCHER_VERSION || true)"
+    if [[ -n "${existing_launcher_version}" ]]; then
+        launcher_version_is_compatible "${existing_launcher_version}" &&
+            [[ "$(read_state_value "${launcher_state_file}" JOB_ID || true)" == \
+               "${requested_job_id}" ]]
+        return
     fi
 
     job_record="$(
@@ -730,7 +737,8 @@ job_uses_managed_launcher() {
         tr ' ' '\n' <<< "${job_record}" |
             awk -F= '$1 == "Comment" { print $2; exit }'
     )"
-    [[ "${job_comment}" == remote-vnc-managed-v17:* ]]
+    [[ "${job_comment}" =~ ^remote-vnc-managed-v([0-9]+): ]] &&
+        launcher_version_is_compatible "${BASH_REMATCH[1]}"
 }
 
 managed_launcher_is_ready() {
@@ -739,8 +747,8 @@ managed_launcher_is_ready() {
 
     launcher_state_file="$(managed_launcher_state_file "${requested_job_id}")"
     [[ "$(read_state_value "${launcher_state_file}" STATUS || true)" == "READY" ]] &&
-        [[ "$(read_state_value "${launcher_state_file}" LAUNCHER_VERSION || true)" == \
-           "${managed_launcher_version}" ]] &&
+        launcher_version_is_compatible \
+            "$(read_state_value "${launcher_state_file}" LAUNCHER_VERSION || true)" &&
        [[ "$(read_state_value "${launcher_state_file}" JOB_ID || true)" == \
            "${requested_job_id}" ]] &&
        [[ "$(read_state_value "${launcher_state_file}" ENVIRONMENT_NAME || true)" == \
@@ -778,7 +786,9 @@ job_matches_requested_configuration() {
         tr ' ' '\n' <<< "${job_record}" |
             awk -F= '$1 == "Comment" { print $2; exit }'
     )"
-    [[ "${job_comment}" == "${managed_launcher_comment}" ]]
+    [[ "${job_comment}" =~ ^remote-vnc-managed-v([0-9]+): ]] &&
+        launcher_version_is_compatible "${BASH_REMATCH[1]}" &&
+        [[ "${job_comment#*:}" == "${managed_launcher_comment#*:}" ]]
 }
 
 opencodex_connection_is_ready() {
@@ -924,9 +934,9 @@ else
                     LAUNCHER_VERSION || true
             )"
             if [[ -n "${existing_launcher_version}" ]]; then
-                printf 'VNC Job %s uses launcher version %s; version %s is required.\n' \
+                printf 'VNC Job %s uses launcher version %s; supported versions: %s.\n' \
                     "${job_id}" "${existing_launcher_version}" \
-                    "${managed_launcher_version}" >&2
+                    "${compatible_launcher_versions}" >&2
             else
                 printf 'VNC Job %s was started without the current managed launcher.\n' \
                     "${job_id}" >&2
@@ -1475,9 +1485,9 @@ master_check_output="$(
 )"
 local_vnc_port=""
 ssh_master_process_id=""
-verify_new_vnc_forward=false
 
 if [[ "${master_check_output}" == *"Master running"* ]]; then
+    log_message "Checking the existing Slurm SSH connection..."
     ssh_master_process_id="$(
         sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' <<< "${master_check_output}"
     )"
@@ -1607,7 +1617,6 @@ if [[ "${master_check_output}" != *"Master running"* ]]; then
     ssh_master_process_id="$(
         sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' <<< "${master_check_output}"
     )"
-    verify_new_vnc_forward=true
 fi
 
 [[ "${ssh_master_process_id}" =~ ^[0-9]+$ ]] ||
@@ -1622,16 +1631,14 @@ if [[ -z "${local_vnc_port}" ]]; then
         -O forward \
         -L "127.0.0.1:${local_vnc_port}:127.0.0.1:${remote_vnc_port}" \
         "${vnc_ssh_target}" || fail "could not create the VNC tunnel"
-    verify_new_vnc_forward=true
 fi
 listener_uses_ssh_master "${local_vnc_port}" ||
     fail "SSH did not listen on local VNC port ${local_vnc_port}"
-if [[ "${verify_new_vnc_forward}" == "true" ]]; then
-    wait_for_local_vnc_rfb "${local_vnc_port}" || {
-        tail -n 80 "${launch_agent_stderr}" >&2 2>/dev/null || true
-        fail "local VNC tunnel on port ${local_vnc_port} did not return an RFB banner"
-    }
-fi
+log_message "Checking the VNC tunnel on localhost:${local_vnc_port}..."
+wait_for_local_vnc_rfb "${local_vnc_port}" || {
+    tail -n 80 "${launch_agent_stderr}" >&2 2>/dev/null || true
+    fail "local VNC tunnel on port ${local_vnc_port} did not return an RFB banner"
+}
 
 if [[ "${active_environment_mode}" == "mutable" ]]; then
     opencodex_forward_specification="127.0.0.1:${local_opencodex_port}"
@@ -1658,11 +1665,12 @@ else
     local_opencodex_port=""
 fi
 
+log_message "Checking container SSH, Slurm allocation, and shared storage (timeout: 45s)..."
 validation_record="$(
     /usr/bin/ssh "${vnc_ssh_connection_options[@]}" \
         -S "${ssh_control_path}" \
         "${vnc_ssh_target}" \
-        /bin/bash -s -- \
+        timeout --kill-after=5 45 /bin/bash -s -- \
         "${REMOTE_SHARED_ROOT}" "${active_environment_name}" \
         "${active_environment_mode}" <<'REMOTE_VALIDATE'
 set -Eeuo pipefail
@@ -1715,8 +1723,8 @@ if [[ "${environment_mode}" == "mutable" ]]; then
     printf 'HOST_RECORD=%s\n' "${host_record}"
     bh-env --env "${environment_name}" status >/dev/null </dev/null
     printf 'BH_ENV_PROXY=available\n'
-    admin_user_id="$(bh-admin -- id -u </dev/null)"
-    printf 'ADMIN_UID=%s\n' "${admin_user_id}"
+    # Connecting to an existing desktop must not acquire the mutation lock or
+    # prepare another writable container merely to test administrative access.
 else
     printf 'SSH_TARGET=HOST\n'
     [[ -x /gpfs/fs1/sfw3/rhel9-x86_64/matlab/r2025b/bin/matlab ]] &&
@@ -1752,8 +1760,6 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
         fail "the container does not share the BlueHive host Codex sessions"
     grep -q '^BH_ENV_PROXY=available$' <<< "${validation_record}" ||
         fail "the container bh-env host proxy failed"
-    grep -q '^ADMIN_UID=0$' <<< "${validation_record}" ||
-        fail "the short-lived bh-admin fakeroot command failed"
     expected_host_record_pattern="^HOST_RECORD=job=${vnc_job_id}"
     expected_host_record_pattern+=" node=${vnc_node} cgroup=.*"
     expected_host_record_pattern+="/job_${vnc_job_id}/step_batch/.*"
@@ -1761,6 +1767,7 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
     grep -Eq "${expected_host_record_pattern}" <<< "${validation_record}" ||
         fail "the container cannot return to the Slurm-bound host shell"
 
+    log_message "Checking container terminal and SFTP access..."
     if ! pty_validation_record="$(
         /usr/bin/ssh "${vnc_ssh_connection_options[@]}" \
             -tt \
