@@ -755,25 +755,107 @@ app_server_updater_pid_file="${persistent_codex_home}/app-server-daemon/app-serv
 app_server_control_socket="${persistent_codex_home}/app-server-control/app-server-control.sock"
 app_server_startup_timeout_seconds=240
 
-write_service_state "STARTING_CODEX_APP_SERVER"
-# The control socket and the daemon's PID records live in the persistent
-# environment home, but every process they name belonged to a container that
-# died with its allocation. A leftover socket makes bind() report "control
-# socket is already in use", and a leftover PID record makes `daemon restart`
-# fail with "failed to read start time for pid-managed app server". This
-# instance is new and the launcher runs one managed VNC job at a time, so any
-# record still present predates this allocation.
-for stale_daemon_record in \
-    "${app_server_control_socket}" "${app_server_pid_file}" \
-    "${app_server_updater_pid_file}"; do
-    [[ -e "${stale_daemon_record}" ]] || continue
-    printf '%s Removing app-server state left by an earlier allocation: %s\n' \
-        "$(date --iso-8601=seconds)" "${stale_daemon_record}" \
-        >> "${service_log_file}"
-    rm -f "${stale_daemon_record}"
-done
-rm -f "${app_server_restart_marker}"
-run_in_container /bin/bash -c '
+app_server_socket_is_ready() {
+    run_in_container /bin/bash -c '[[ -S "$1" ]]' -- \
+        "${container_codex_home}/app-server-control/app-server-control.sock" \
+        >/dev/null 2>&1
+}
+
+instance_codex_app_server_is_running() {
+    local process_id="$1"
+
+    instance_process_belongs_to_job "${process_id}" || return 1
+    run_in_container /bin/bash -c '
+        [[ -r "/proc/$1/cmdline" ]] || exit 1
+        command_line="$(tr "\0" " " < "/proc/$1/cmdline")"
+        [[ "${command_line}" == *" app-server "* ]]
+    ' -- "${process_id}" >/dev/null 2>&1
+}
+
+app_server_socket_owner_pid() {
+    run_in_container /bin/bash -c '
+        socket="$1"
+        [[ -S "${socket}" ]] || exit 1
+        socket_target="$(readlink -f -- "${socket}")" || exit 1
+        socket_listing="$(ss -xlpn)" || exit 1
+        awk -v socket_target="${socket_target}" '\''
+            $1 == "u_str" && $2 == "LISTEN" && index($0, socket_target) {
+                if (match($0, /pid=[0-9]+/)) {
+                    print substr($0, RSTART + 4, RLENGTH - 4)
+                    exit
+                }
+            }
+        '\'' <<< "${socket_listing}"
+    ' -- "${container_codex_home}/app-server-control/app-server-control.sock"
+}
+
+start_codex_app_server() {
+    local attempt_number stale_daemon_record updater_process_candidate
+    local recorded_process_id socket_owner_process_id
+
+    # Another command may already have restored the daemon during the monitor's
+    # grace period. Never remove a live job-owned daemon's control records.
+    recorded_process_id="$(
+        read_json_integer "$(head -n 1 "${app_server_pid_file}" 2>/dev/null || true)" pid
+    )"
+    if instance_codex_app_server_is_running "${recorded_process_id}"; then
+        app_server_process_id="${recorded_process_id}"
+        app_server_status="running"
+        app_server_process_cgroup="$(
+            instance_process_cgroup_record "${app_server_process_id}"
+        )"
+        write_service_state "READY"
+        return 0
+    fi
+
+    # A failed daemon restart can replace its PID record while another app
+    # server still owns the socket. Adopt that verified job-owned server: it may
+    # be serving active Codex clients, and another restart would collide with it.
+    socket_owner_process_id=""
+    if app_server_socket_is_ready; then
+        socket_owner_process_id="$(app_server_socket_owner_pid)" || {
+            printf 'Could not inspect the existing app-server control socket.\n' >&2
+            return 1
+        }
+        [[ "${socket_owner_process_id}" =~ ^[0-9]+$ ]] || {
+            printf 'Existing app-server socket has no identifiable owner.\n' >&2
+            return 1
+        }
+    fi
+    if [[ "${socket_owner_process_id}" =~ ^[0-9]+$ ]]; then
+        if ! instance_codex_app_server_is_running "${socket_owner_process_id}"; then
+            printf 'Refusing to replace an app-server socket owned by PID %s outside this job.\n' \
+                "${socket_owner_process_id}" >&2
+            return 1
+        fi
+        printf '%s Adopting live Codex app server PID %s from its control socket.\n' \
+            "$(date --iso-8601=seconds)" "${socket_owner_process_id}" \
+            >> "${service_log_file}"
+        app_server_process_id="${socket_owner_process_id}"
+        app_server_status="running"
+        app_server_process_cgroup="$(
+            instance_process_cgroup_record "${app_server_process_id}"
+        )"
+        write_service_state "READY"
+        return 0
+    fi
+
+    app_server_status="starting"
+    app_server_process_id=""
+    write_service_state "STARTING_CODEX_APP_SERVER"
+    # A dead daemon leaves a socket and PID records in the persistent home.
+    # Only clear these after checking that no server owns the socket.
+    for stale_daemon_record in \
+        "${app_server_control_socket}" "${app_server_pid_file}" \
+        "${app_server_updater_pid_file}"; do
+        [[ -e "${stale_daemon_record}" || -L "${stale_daemon_record}" ]] || continue
+        printf '%s Removing stale app-server state: %s\n' \
+            "$(date --iso-8601=seconds)" "${stale_daemon_record}" \
+            >> "${service_log_file}"
+        rm -f "${stale_daemon_record}"
+    done
+    rm -f "${app_server_restart_marker}"
+    run_in_container /bin/bash -c '
         set -Eeuo pipefail
         managed_codex="$1"
         restart_marker="$2"
@@ -803,59 +885,84 @@ run_in_container /bin/bash -c '
         mv "${temporary_restart_marker}" "${restart_marker}"
     ' -- "${managed_codex_executable}" "${app_server_restart_marker}" \
         "${app_server_startup_timeout_seconds}" \
-    >> "${service_log_file}" 2>&1 &
-app_server_launcher_process_id=$!
+        >> "${service_log_file}" 2>&1 &
+    app_server_launcher_process_id=$!
 
-for ((attempt_number = 1;
-      attempt_number <= app_server_startup_timeout_seconds + 120;
-      attempt_number++)); do
-    if [[ ! -s "${app_server_restart_marker}" ]] &&
-       ! kill -0 "${app_server_launcher_process_id}" 2>/dev/null; then
-        printf 'Codex app-server launcher exited before becoming ready. Log: %s\n' \
-            "${service_log_file}" >&2
-        exit 5
-    fi
-    if [[ -s "${app_server_restart_marker}" &&
-          -s "${app_server_pid_file}" &&
-          -S "${app_server_control_socket}" ]]; then
-        app_server_process_id="$(
-            read_json_integer "$(head -n 1 "${app_server_pid_file}")" pid
-        )"
-        if instance_process_belongs_to_job "${app_server_process_id}"; then
-            if [[ -s "${app_server_updater_pid_file}" ]]; then
-                updater_process_candidate="$(
-                    read_json_integer \
-                        "$(head -n 1 "${app_server_updater_pid_file}")" pid
-                )"
-                if instance_process_belongs_to_job \
-                    "${updater_process_candidate}"; then
-                    app_server_updater_process_id="${updater_process_candidate}"
-                fi
-            fi
-            app_server_status="running"
+    for ((attempt_number = 1;
+          attempt_number <= app_server_startup_timeout_seconds + 120;
+          attempt_number++)); do
+        if [[ ! -s "${app_server_restart_marker}" ]] &&
+           ! kill -0 "${app_server_launcher_process_id}" 2>/dev/null; then
+            wait "${app_server_launcher_process_id}" 2>/dev/null || true
+            app_server_launcher_process_id=""
             break
         fi
+        if [[ -s "${app_server_restart_marker}" &&
+              -s "${app_server_pid_file}" ]] &&
+           app_server_socket_is_ready; then
+            app_server_process_id="$(
+                read_json_integer "$(head -n 1 "${app_server_pid_file}")" pid
+            )"
+            if instance_codex_app_server_is_running "${app_server_process_id}"; then
+                if [[ -s "${app_server_updater_pid_file}" ]]; then
+                    updater_process_candidate="$(
+                        read_json_integer \
+                            "$(head -n 1 "${app_server_updater_pid_file}")" pid
+                    )"
+                    if instance_process_belongs_to_job \
+                        "${updater_process_candidate}"; then
+                        app_server_updater_process_id="${updater_process_candidate}"
+                    fi
+                fi
+                app_server_status="running"
+                break
+            fi
+        fi
+        sleep 1
+    done
+    if [[ "${app_server_status}" != "running" ]]; then
+        if [[ "${app_server_launcher_process_id}" =~ ^[0-9]+$ ]]; then
+            kill -TERM "${app_server_launcher_process_id}" 2>/dev/null || true
+            wait "${app_server_launcher_process_id}" 2>/dev/null || true
+            app_server_launcher_process_id=""
+        fi
+        # A client may have started its own server while the managed launch
+        # retried. Use that live endpoint instead of failing the VNC job.
+        socket_owner_process_id="$(app_server_socket_owner_pid || true)"
+        if instance_codex_app_server_is_running "${socket_owner_process_id}"; then
+            app_server_process_id="${socket_owner_process_id}"
+            app_server_status="running"
+            app_server_process_cgroup="$(
+                instance_process_cgroup_record "${app_server_process_id}"
+            )"
+            write_service_state "READY"
+            return 0
+        fi
+        printf 'Codex app server did not become ready inside Slurm Job %s. Log: %s\n' \
+            "${job_id}" "${service_log_file}" >&2
+        app_server_status="stopped"
+        app_server_process_id=""
+        return 1
     fi
-    sleep 1
-done
-[[ "${app_server_status}" == "running" ]] || {
-    printf 'Codex app server did not become ready inside Slurm Job %s. Log: %s\n' \
-        "${job_id}" "${service_log_file}" >&2
-    exit 5
+    wait "${app_server_launcher_process_id}" || return 1
+    app_server_launcher_process_id=""
+    app_server_process_cgroup="$(
+        instance_process_cgroup_record "${app_server_process_id}"
+    )"
+    write_service_state "READY"
 }
-wait "${app_server_launcher_process_id}"
-app_server_launcher_process_id=""
-app_server_process_cgroup="$(
-    instance_process_cgroup_record "${app_server_process_id}"
-)"
-write_service_state "READY"
+
+start_codex_app_server || exit 5
 printf 'OPENCODEX_READY job=%s node=%s instance=%s port=%s proxy_pid=%s app_server_pid=%s\n' \
     "${job_id}" "$(hostname -s)" "${service_instance_name}" \
     "${opencodex_port}" "${opencodex_process_id}" \
     "${app_server_process_id}"
 
-# The instance belongs to the allocation. AI processes may stay stopped for as
-# long as maintenance requires; observe them without ending the instance/job.
+# The instance belongs to the allocation. Observe both services without
+# ending the VNC job if either needs recovery.
+app_server_missing_checks=0
+app_server_retry_delay_seconds=5
+app_server_next_retry_at=0
 while process_belongs_to_job "${service_instance_process_id}" &&
       kill -0 "${service_instance_process_id}" 2>/dev/null; do
     sleep 5
@@ -913,10 +1020,31 @@ while process_belongs_to_job "${service_instance_process_id}" &&
         read_json_integer "$(head -n 1 "${app_server_pid_file}" 2>/dev/null || true)" pid
     )"
     app_server_status="stopped"
-    if instance_process_belongs_to_job "${app_server_process_id}"; then
+    if instance_codex_app_server_is_running "${app_server_process_id}"; then
         app_server_status="running"
+        app_server_missing_checks=0
+        app_server_retry_delay_seconds=5
+        app_server_next_retry_at=0
     else
         app_server_process_id=""
+        app_server_missing_checks=$((app_server_missing_checks + 1))
+        if (( app_server_missing_checks >= 2 &&
+              SECONDS >= app_server_next_retry_at )); then
+            printf '%s Codex app server is missing; restarting it inside the service instance.\n' \
+                "$(date --iso-8601=seconds)" >> "${service_log_file}"
+            if start_codex_app_server; then
+                app_server_missing_checks=0
+                app_server_retry_delay_seconds=5
+                app_server_next_retry_at=0
+            else
+                app_server_next_retry_at=$((SECONDS + app_server_retry_delay_seconds))
+                app_server_retry_delay_seconds=$((app_server_retry_delay_seconds * 2))
+                if (( app_server_retry_delay_seconds > 60 )); then
+                    app_server_retry_delay_seconds=60
+                fi
+                write_service_state "READY"
+            fi
+        fi
     fi
     current_service_record="${opencodex_supervisor_status}|${opencodex_supervisor_process_id}|${opencodex_status}|${opencodex_process_id}|${app_server_status}|${app_server_process_id}"
     if [[ "${current_service_record}" != "${previous_service_record}" ]]; then

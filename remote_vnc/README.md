@@ -49,12 +49,14 @@ Codex session directories, indexes, attachments, artifacts, and writer locks
 into every container and points `CODEX_SQLITE_HOME` to the host `.codex` state.
 The host is therefore the canonical live session store. The VNC job is reported
 ready only after the instance, both services, and the host-session mounts pass
-their health and cgroup checks.
+their health and cgroup checks. The SSH container binds the service instance's
+`/tmp` directory so `codex app-server proxy` can reach the daemon's Unix socket;
+the client launcher verifies that socket from an SSH session.
 After startup, the daemon monitor checks the PID file and Slurm cgroup without
 opening repeated RPC connections. A busy daemon can time out an RPC status
-query while its process is still running. Missing processes can remain stopped
-indefinitely for maintenance, and replacement PIDs refresh the service state.
-Neither AI service nor its supervisor exiting causes VNC/SSH to stop.
+query while its process is still running. After two missing checks it restarts
+the Codex app server with bounded retry delays; replacement PIDs refresh the
+service state. Neither AI service nor its supervisor exiting ends VNC/SSH.
 The job starts `opencodex_supervisor.sh` as an independent service process. It
 owns the OpenCodex lifecycle, writes `supervisor.log` and `supervisor.env`, and
 restarts an unexpected exit with bounded exponential backoff. `ocx stop` pauses
@@ -72,9 +74,13 @@ it blocks in `semop()` forever: a `nohup`-style supervisor produced an empty
 instance therefore needs a session that outlives it.
 
 The Codex app-server daemon detaches by design, so it runs without that
-fakeroot preload instead. Its control socket and PID records live in the
-persistent environment home and name processes from a container that died with
-its allocation, so startup clears them first; otherwise the daemon reports
+fakeroot preload instead. Its persistent home holds the control socket symlink
+and PID records; the socket target lives in the job's service runtime `/tmp`.
+The PID records can name processes from a container that died with
+its allocation. Startup and recovery check both the recorded PID and the live
+socket owner. A verified job-owned server is adopted even when its PID record
+is stale; records are cleared only when no process owns the socket. Otherwise
+the daemon reports
 "control socket is already in use" or "failed to read start time". The daemon
 opens its SQLite state on shared storage before it binds the socket, which can
 outlast one `daemon restart` readiness wait, so startup retries the restart for

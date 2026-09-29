@@ -75,6 +75,7 @@ ssh-keygen -lf "${authorized_keys_file}" >/dev/null || {
 
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${SLURM_JOB_ID}"
+service_tmp_directory="${job_state_directory}/opencodex/runtime/tmp"
 vnc_connection_file="${state_directory}/connection.env"
 host_shell_directory="${job_state_directory}/host-shell"
 remote_ssh_directory="${job_state_directory}/remote-ssh"
@@ -197,10 +198,12 @@ if [[ -n "${opencodex_port}" ]] &&
     exit 2
 fi
 
-permit_open_targets="127.0.0.1:${vnc_port}"
-if [[ -n "${opencodex_port}" ]]; then
-    permit_open_targets+=" 127.0.0.1:${opencodex_port}"
-fi
+# Editors such as VS Code Remote-SSH start their own server on a port chosen
+# inside the job, so the client cannot name the target in advance. Any loopback
+# address of the job is allowed; AllowTcpForwarding=local still keeps the
+# session from reaching other hosts, and the session can already run commands
+# here, so this grants no additional reach.
+permit_open_targets="127.0.0.1:*"
 
 write_container_ssh_files() {
     local installed_proxy="${container_command_host_directory}/container-host-proxy"
@@ -324,7 +327,13 @@ write_container_ssh_files() {
         printf '        exec /usr/lib/openssh/sftp-server\n'
         printf '        ;;\n'
         printf '    "")\n'
-        printf '        exec /usr/bin/fish -l\n'
+        printf '        # A login with a terminal gets Fish. A session without\n'
+        printf '        # one, such as VS Code Remote-SSH, pipes POSIX shell\n'
+        printf '        # script through stdin and needs Bash to read it.\n'
+        printf '        if [ -t 0 ]; then\n'
+        printf '            exec /usr/bin/fish -l\n'
+        printf '        fi\n'
+        printf '        exec /bin/bash\n'
         printf '        ;;\n'
         printf '    *)\n'
         printf '        exec /bin/bash -c "${SSH_ORIGINAL_COMMAND}"\n'
@@ -354,7 +363,18 @@ if [[ "${environment_mode}" == "mutable" ]]; then
     bh_env_append_runtime_options \
         container_options "${environment_home}" "${runtime_directory}" \
         "${display_value}" normal
+    [[ -d "${service_tmp_directory}" ]] || {
+        printf 'AI service runtime /tmp is unavailable: %s\n' \
+            "${service_tmp_directory}" >&2
+        exit 2
+    }
+    # The Codex daemon publishes its control socket through /tmp. SSH
+    # sessions must see the same bind as the separate AI service instance.
     container_options+=(
+        --bind "${service_tmp_directory}:/tmp"
+        --env "TMPDIR=/tmp"
+        --env "TMP=/tmp"
+        --env "TEMP=/tmp"
         --bind "${container_group_file}:/etc/group:ro"
     )
     sshd_launch_prefix=(

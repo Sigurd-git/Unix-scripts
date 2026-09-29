@@ -554,9 +554,10 @@ or update aborts startup with a log path. Reconnecting to an existing job skips
 updates. The update stage has a separate 15-minute budget.
 
 Once ready, OpenCodex and the Codex daemon run independently inside the job.
-Stopping, updating, or restarting either service leaves VNC and SSH running,
-even if the service stays stopped indefinitely. Check them from the container
-SSH shell:
+Stopping, updating, or restarting either service leaves VNC and SSH running.
+The Codex daemon is restarted automatically after two missing process checks;
+OpenCodex has its own supervisor and can be paused with `ocx stop`. Check them
+from the container SSH shell:
 
 ```bash
 blhc3 'ocx ready --json'
@@ -594,7 +595,8 @@ reports when it is unavailable while still allowing access to VNC and SSH.
 The VNC desktop and service instance use the same sandbox and persistent HOME.
 The separate instance keeps the long-lived OpenCodex and app-server processes
 in one PID namespace. Direct container SSH sessions share their network and
-HOME. Host and container SSH commands for OpenCodex and Codex daemon management
+HOME, and bind the service instance's `/tmp` so Codex.app can reach the daemon
+socket. Host and container SSH commands for OpenCodex and Codex daemon management
 join the service instance through the job's host backchannel. Ordinary Codex
 terminal work stays in its caller's working directory.
 
@@ -616,10 +618,12 @@ copying. Existing container-only session files are hidden and are no longer
 used. The host terminal continues to use `$HOME/.codex` directly.
 
 Startup verifies the Apptainer instance, OpenCodex proxy, and Codex app-server
-PIDs against the VNC job's batch cgroup before marking the job ready. Service
+PIDs against the VNC job's batch cgroup. The SSH validation also checks that
+the daemon's control socket is visible before reporting the connection ready. Service
 state and logs are in
 `users/${USER}/state/jobs/<slurm_job_id>/opencodex/`. After startup, the monitor
-records stopped services and replacement PIDs without terminating the job.
+restarts a missing Codex daemon with bounded retry delays and records
+replacement PIDs without terminating the job.
 Daemon monitoring uses PID/cgroup checks rather than potentially busy RPCs.
 
 ### Automatic Illustrator Bundle Sync

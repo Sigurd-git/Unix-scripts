@@ -231,6 +231,7 @@ local_connection_state_file="${HOME}/.ssh/remote_vnc_${cluster_name}.env"
 local_user_name="$(id -un)"
 local_user_id="$(id -u)"
 ssh_control_path="/tmp/unix-scripts-vnc-${local_user_id}-${cluster_name}.sock"
+launch_agent_control_path="${ssh_control_path}.launcher"
 launch_agent_label="com.${local_user_name}.remote-vnc.${cluster_name}"
 launch_agent_domain="gui/$(id -u)"
 launch_agent_directory="${HOME}/Library/LaunchAgents"
@@ -1390,6 +1391,33 @@ listener_uses_ssh_master() {
     return 1
 }
 
+launch_agent_process_id() {
+    local launch_agent_record
+
+    launch_agent_record="$(
+        launchctl print "${launch_agent_domain}/${launch_agent_label}" \
+            2>/dev/null || true
+    )"
+    awk '$1 == "pid" && $2 == "=" && process_id == "" {
+        process_id = $3
+    } END { print process_id }' <<< "${launch_agent_record}"
+}
+
+listener_uses_managed_ssh() {
+    local requested_port="$1"
+    local launch_agent_pid="$(launch_agent_process_id)"
+    local listener_process_id
+
+    # An ordinary `ssh blhc3` can win the ControlPath startup race and become
+    # the master. The LaunchAgent still owns a valid VNC listener in that case.
+    while IFS= read -r listener_process_id; do
+        [[ "${listener_process_id}" == "${ssh_master_process_id}" ||
+           ( "${launch_agent_pid}" =~ ^[0-9]+$ &&
+             "${listener_process_id}" == "${launch_agent_pid}" ) ]] && return 0
+    done < <(local_listener_process_ids "${requested_port}")
+    return 1
+}
+
 read_local_rfb_banner() {
     local requested_port="$1"
     local rfb_banner=""
@@ -1475,12 +1503,19 @@ stop_local_vnc_connection() {
     /usr/bin/ssh -F /dev/null -S "${ssh_control_path}" -O exit \
         "${vnc_ssh_target}" \
         >/dev/null 2>&1 || true
+    /usr/bin/ssh -F /dev/null -S "${launch_agent_control_path}" -O exit \
+        "${vnc_ssh_target}" \
+        >/dev/null 2>&1 || true
     for _ in 1 2 3 4 5; do
-        [[ ! -S "${ssh_control_path}" ]] && break
+        [[ ! -S "${ssh_control_path}" &&
+           ! -S "${launch_agent_control_path}" ]] && break
         sleep 1
     done
     if [[ -S "${ssh_control_path}" ]]; then
         unlink "${ssh_control_path}"
+    fi
+    if [[ -S "${launch_agent_control_path}" ]]; then
+        unlink "${launch_agent_control_path}"
     fi
 }
 
@@ -1490,6 +1525,18 @@ master_check_output="$(
 )"
 local_vnc_port=""
 ssh_master_process_id=""
+
+if [[ "${master_check_output}" == *"Master running"* ]]; then
+    ssh_master_process_id="$(
+        sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' <<< "${master_check_output}"
+    )"
+    if [[ "${ssh_master_process_id}" != "$(launch_agent_process_id)" ]]; then
+        log_message "Replacing an SSH control connection not owned by the VNC LaunchAgent."
+        stop_local_vnc_connection
+        master_check_output=""
+        ssh_master_process_id=""
+    fi
+fi
 
 if [[ "${master_check_output}" == *"Master running"* ]]; then
     log_message "Checking the existing Slurm SSH connection..."
@@ -1510,7 +1557,7 @@ if [[ "${master_check_output}" == *"Master running"* ]]; then
         if [[ "${saved_job_id}" == "${vnc_job_id}" &&
               "${saved_remote_vnc_port}" == "${remote_vnc_port}" &&
               "${saved_local_vnc_port}" =~ ^[0-9]+$ ]] &&
-           listener_uses_ssh_master "${saved_local_vnc_port}"; then
+           listener_uses_managed_ssh "${saved_local_vnc_port}"; then
             local_vnc_port="${saved_local_vnc_port}"
         else
             for ((candidate_port = remote_vnc_port + 10000;
@@ -1551,7 +1598,7 @@ if [[ "${master_check_output}" != *"Master running"* ]]; then
     launch_agent_arguments=(
         /usr/bin/ssh
         -MN
-        -S "${ssh_control_path}"
+        -S "${launch_agent_control_path}"
         -o ControlMaster=yes
         -o ControlPersist=no
         -o ExitOnForwardFailure=yes
@@ -1605,13 +1652,18 @@ if [[ "${master_check_output}" != *"Master running"* ]]; then
 
     for _ in {1..30}; do
         master_check_output="$(
-            /usr/bin/ssh -F /dev/null -S "${ssh_control_path}" -O check \
+            /usr/bin/ssh -F /dev/null -S "${launch_agent_control_path}" -O check \
                 "${vnc_ssh_target}" \
                 2>&1 || true
         )"
-        if [[ "${master_check_output}" == *"Master running"* ]] &&
-           [[ -n "$(local_listener_process_ids "${local_vnc_port}")" ]]; then
-            break
+        if [[ "${master_check_output}" == *"Master running"* ]]; then
+            ssh_master_process_id="$(
+                sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' \
+                    <<< "${master_check_output}"
+            )"
+            if listener_uses_ssh_master "${local_vnc_port}"; then
+                break
+            fi
         fi
         sleep 1
     done
@@ -1619,6 +1671,16 @@ if [[ "${master_check_output}" != *"Master running"* ]]; then
         tail -n 80 "${launch_agent_stderr}" >&2 2>/dev/null || true
         fail "the Slurm SSH control connection is not running"
     }
+    listener_uses_ssh_master "${local_vnc_port}" ||
+        fail "the VNC LaunchAgent does not own local port ${local_vnc_port}"
+    mv -f "${launch_agent_control_path}" "${ssh_control_path}" ||
+        fail "could not publish the VNC SSH control socket"
+    master_check_output="$(
+        /usr/bin/ssh -F /dev/null -S "${ssh_control_path}" -O check \
+            "${vnc_ssh_target}" 2>&1 || true
+    )"
+    [[ "${master_check_output}" == *"Master running"* ]] ||
+        fail "the published VNC SSH control socket is not running"
     ssh_master_process_id="$(
         sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' <<< "${master_check_output}"
     )"
@@ -1637,7 +1699,7 @@ if [[ -z "${local_vnc_port}" ]]; then
         -L "127.0.0.1:${local_vnc_port}:127.0.0.1:${remote_vnc_port}" \
         "${vnc_ssh_target}" || fail "could not create the VNC tunnel"
 fi
-listener_uses_ssh_master "${local_vnc_port}" ||
+listener_uses_managed_ssh "${local_vnc_port}" ||
     fail "SSH did not listen on local VNC port ${local_vnc_port}"
 log_message "Checking the VNC tunnel on localhost:${local_vnc_port}..."
 wait_for_local_vnc_rfb "${local_vnc_port}" || {
@@ -1677,11 +1739,13 @@ validation_record="$(
         "${vnc_ssh_target}" \
         timeout --kill-after=5 45 /bin/bash -s -- \
         "${REMOTE_SHARED_ROOT}" "${active_environment_name}" \
-        "${active_environment_mode}" <<'REMOTE_VALIDATE'
+        "${active_environment_mode}" \
+        "${active_codex_app_server_status}" <<'REMOTE_VALIDATE'
 set -Eeuo pipefail
 remote_shared_root="$1"
 environment_name="$2"
 environment_mode="$3"
+codex_app_server_status="$4"
 printf 'JOB_ID=%s\n' "${SLURM_JOB_ID:-}"
 printf 'NODE=%s\n' "$(hostname -s)"
 printf 'CPUS=%s\n' "${SLURM_CPUS_PER_TASK:-}"
@@ -1718,6 +1782,13 @@ if [[ "${environment_mode}" == "mutable" ]]; then
     [[ "$(stat -Lc '%d:%i' "${CODEX_HOME}/archived_sessions")" == \
        "$(stat -Lc '%d:%i' /bluehive-home/.codex/archived_sessions)" ]]
     printf 'CODEX_SESSION_SHARING=host\n'
+    if [[ "${codex_app_server_status}" == "running" ]]; then
+        if [[ -S "${CODEX_HOME}/app-server-control/app-server-control.sock" ]]; then
+            printf 'CODEX_APP_SERVER_SOCKET=visible\n'
+        else
+            printf 'CODEX_APP_SERVER_SOCKET=missing\n'
+        fi
+    fi
     printf 'SOFTWARE=available\n'
 
     host_record="$(
@@ -1763,6 +1834,11 @@ if [[ "${active_environment_mode}" == "mutable" ]]; then
         fail "the container SSH shell is missing required software or mounts"
     grep -q '^CODEX_SESSION_SHARING=host$' <<< "${validation_record}" ||
         fail "the container does not share the BlueHive host Codex sessions"
+    if [[ "${active_codex_app_server_status}" == "running" ]]; then
+        grep -q '^CODEX_APP_SERVER_SOCKET=visible$' \
+            <<< "${validation_record}" ||
+            fail "the container SSH shell cannot reach the Codex app-server socket"
+    fi
     grep -q '^BH_ENV_PROXY=available$' <<< "${validation_record}" ||
         fail "the container bh-env host proxy failed"
     expected_host_record_pattern="^HOST_RECORD=job=${vnc_job_id}"

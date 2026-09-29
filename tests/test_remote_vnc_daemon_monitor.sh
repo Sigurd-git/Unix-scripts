@@ -24,11 +24,16 @@ opencodex_supervisor_status=running
 app_server_process_id=201
 opencodex_status=running
 app_server_status=running
+app_server_retry_attempts=0
+daemon_recovered=false
 iteration=0
 process_belongs_to_job() { ((iteration < 35)); }
 instance_process_belongs_to_job() {
     [[ "${scenario}" != wrong_job &&
        ( "$1" == 102 || "$1" == 202 || "$1" == 301 || "$1" == 302 ) ]]
+}
+instance_codex_app_server_is_running() {
+    instance_process_belongs_to_job "$1"
 }
 instance_process_cgroup_record() { printf 'fixture-job'; }
 read_json_integer() { jq -r --arg key "$2" '.[$key] // empty' <<< "$1" 2>/dev/null || true; }
@@ -72,6 +77,22 @@ start_opencodex_supervisor() {
     opencodex_supervisor_status=starting
     printf 'supervisor-restarted\n' >> "${fixture_directory}/states"
 }
+start_codex_app_server() {
+    app_server_retry_attempts=$((app_server_retry_attempts + 1))
+    printf 'daemon-restart-attempt=%s\n' "${iteration}" \
+        >> "${fixture_directory}/states"
+    if [[ "${scenario}" == wrong_job ]] ||
+       { [[ "${scenario}" == retry ]] &&
+         ((app_server_retry_attempts < 3)); }; then
+        app_server_status=stopped
+        return 1
+    fi
+    daemon_recovered=true
+    app_server_process_id=202
+    app_server_status=running
+    printf '{"pid":202}\n' > "${app_server_pid_file}"
+    printf 'daemon-restarted\n' >> "${fixture_directory}/states"
+}
 write_service_state() {
     printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" \
         "${opencodex_supervisor_status}" "${opencodex_supervisor_process_id}" \
@@ -82,7 +103,8 @@ write_service_state() {
 sleep() {
     iteration=$((iteration + 1))
     SECONDS=$((SECONDS + $1))
-    if ((iteration >= 30)) && [[ "${scenario}" != stopped ]]; then
+    if [[ "${daemon_recovered}" == true ]] ||
+       { ((iteration >= 30)) && [[ "${scenario}" != stopped ]]; }; then
         printf '{"pid":202}\n' > "${app_server_pid_file}"
     else
         printf '{}\n' > "${app_server_pid_file}"
@@ -92,7 +114,7 @@ sleep() {
 source "${fixture_directory}/monitor.sh"
 FIXTURE
 
-for scenario in stopped restart wrong_job; do
+for scenario in stopped restart wrong_job retry; do
     : > "${fixture_directory}/states"
     : > "${fixture_directory}/service.log"
     actual_status=0
@@ -102,13 +124,18 @@ for scenario in stopped restart wrong_job; do
     [[ "$(cat "${fixture_directory}/last-iteration")" == 35 ]]
     grep -q 'Apptainer service instance stopped' "${fixture_directory}/stderr"
     if [[ "${scenario}" == stopped ]]; then
-        grep -qx 'READY|stopped|301|stopped||stopped|' "${fixture_directory}/states"
+        grep -qx 'READY|stopped|301|stopped||running|202' "${fixture_directory}/states"
+        grep -qx 'daemon-restarted' "${fixture_directory}/states"
     elif [[ "${scenario}" == restart ]]; then
         grep -qx 'READY|running|302|running|102|running|202' "${fixture_directory}/states"
-    else
+    elif [[ "${scenario}" == wrong_job ]]; then
         ! grep -q 'READY|running|302' "${fixture_directory}/states"
+        ! grep -qx 'daemon-restarted' "${fixture_directory}/states"
+    else
+        [[ "$(grep -c '^daemon-restart-attempt=' "${fixture_directory}/states")" -eq 3 ]]
+        grep -qx 'daemon-restarted' "${fixture_directory}/states"
     fi
-    printf 'PASS: %s AI services do not end the allocation; monitor follows replacement PIDs\n' "${scenario}"
+    printf 'PASS: %s AI services recover without ending the allocation\n' "${scenario}"
 done
 
 # Even loss of the service supervisor must not tear down the VNC desktop.
