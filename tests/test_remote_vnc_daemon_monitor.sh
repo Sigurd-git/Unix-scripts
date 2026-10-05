@@ -7,15 +7,22 @@ fixture_directory="$(mktemp -d)"
 trap 'rm -rf "${fixture_directory}"' EXIT
 export fixture_directory
 
-awk '/^# The instance belongs to the allocation\./ {copy=1} copy {print}' \
+awk '/^find_running_app_server\(\)/ {copy=1} copy {print} copy && /^}/ {exit}' \
     "${repository_directory}/remote_vnc/start_opencodex.sh" > "${fixture_directory}/monitor.sh"
+awk '/^# The instance belongs to the allocation\./ {copy=1} copy {print}' \
+    "${repository_directory}/remote_vnc/start_opencodex.sh" >> "${fixture_directory}/monitor.sh"
 [[ -s "${fixture_directory}/monitor.sh" ]]
 
 cat > "${fixture_directory}/fixture.sh" <<'FIXTURE'
 set -Eeuo pipefail
 service_instance_process_id=$$
 service_log_file="${fixture_directory}/service.log"
-app_server_pid_file="${fixture_directory}/daemon.pid"
+app_server_pid_files=(
+    "${fixture_directory}/app-server.pid"
+    "${fixture_directory}/daemon.pid"
+)
+app_server_pid_file="${app_server_pid_files[1]}"
+container_app_server_control_socket="${fixture_directory}/app-server.sock"
 opencodex_process_id=101
 opencodex_port=10100
 opencodex_supervisor_process_id=301

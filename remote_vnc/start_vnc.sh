@@ -561,9 +561,13 @@ chmod 600 "${host_shell_rc_file}"
     printf 'if [[ -t 0 && -t 1 ]]; then\n'
     printf '    ssh_tty_option=-tt\n'
     printf 'fi\n'
-    printf 'exec /host/lib64/ld-linux-x86-64.so.2 \\\n'
-    printf '    --library-path /host/lib64:/host/usr/lib64 \\\n'
-    printf '    /host/usr/bin/ssh "${ssh_tty_option}" \\\n'
+    printf 'if [[ -x /host/lib64/ld-linux-x86-64.so.2 && -x /host/usr/bin/ssh ]]; then\n'
+    printf '    ssh_command=(/host/lib64/ld-linux-x86-64.so.2 \\\n'
+    printf '        --library-path /host/lib64:/host/usr/lib64 /host/usr/bin/ssh)\n'
+    printf 'else\n'
+    printf '    ssh_command=(/usr/bin/ssh)\n'
+    printf 'fi\n'
+    printf 'exec "${ssh_command[@]}" "${ssh_tty_option}" \\\n'
     printf '    -i %q \\\n' "${container_home}/.ssh/bluehive-host-shell"
     printf '    -p %q \\\n' "${host_shell_port}"
     printf '    -o BatchMode=yes \\\n'

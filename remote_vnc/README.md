@@ -24,13 +24,15 @@ The VNC Slurm job first checks the shared base image:
 
 If that image is unavailable or invalid, `build_vnc_image.sh` builds a private
 copy under `$REMOTE_SHARED_ROOT/remote-vnc/users/$USER/images/` inside the VNC
-allocation. The default launch then prepares a named writable sandbox under
+allocation. Both the shared SIF recipe and the private fallback install Ubuntu's
+`bubblewrap` package and verify that `bwrap` is available. The default launch
+then prepares a named writable sandbox under
 `users/$USER/environments/`.
 
 `prepare_environment.sh` creates versioned sandbox generations and calls
 `provision_environment.sh` with fakeroot. The recipe installs the package list,
 Fish, OpenCodex, Codex CLI, CUDA 12.5 development tools, Chrome, ChatGPT, uv,
-pixi, Noto CJK fonts, and MATLAB R2025b with the products in
+pixi, bubblewrap, Noto CJK fonts, and MATLAB R2025b with the products in
 `matlab-products.txt`. Provisioning verifies that the completed environment has
 at least one Chinese-capable font and that MATLAB's splash library has no
 unresolved dependencies. A validated `current` symlink activates the generation.
@@ -49,8 +51,9 @@ Codex session directories, indexes, attachments, artifacts, and writer locks
 into every container and points `CODEX_SQLITE_HOME` to the host `.codex` state.
 The host is therefore the canonical live session store. The VNC job is reported
 ready only after the instance, both services, and the host-session mounts pass
-their health and cgroup checks. The SSH container binds the service instance's
-`/tmp` directory so `codex app-server proxy` can reach the daemon's Unix socket;
+their health and cgroup checks. The SSH container reads `SERVICE_TMP_DIRECTORY`
+from the job's service state and binds the same node-local `/tmp` as the service
+instance so `codex app-server proxy` can reach the daemon's Unix socket;
 the client launcher verifies that socket from an SSH session.
 After startup, the daemon monitor checks the PID file and Slurm cgroup without
 opening repeated RPC connections. A busy daemon can time out an RPC status
@@ -75,7 +78,8 @@ instance therefore needs a session that outlives it.
 
 The Codex app-server daemon detaches by design, so it runs without that
 fakeroot preload instead. Its persistent home holds the control socket symlink
-and PID records; the socket target lives in the job's service runtime `/tmp`.
+and PID records; the socket target lives in the job's node-local service `/tmp`.
+Both the old `app-server.pid` and newer `daemon.pid` layouts are supported.
 The PID records can name processes from a container that died with
 its allocation. Startup and recovery check both the recorded PID and the live
 socket owner. A verified job-owned server is adopted even when its PID record
@@ -84,7 +88,18 @@ the daemon reports
 "control socket is already in use" or "failed to read start time". The daemon
 opens its SQLite state on shared storage before it binds the socket, which can
 outlast one `daemon restart` readiness wait, so startup retries the restart for
-up to 240 seconds before it reports failure.
+up to 240 seconds before it reports failure. Codex may link its control socket
+to the instance's private `/tmp`; readiness checks the socket and its owning
+process inside that instance, while the host removes stale links before a new
+allocation starts.
+The service instance omits the recursive `/host` mount and binds its private
+`/tmp` from a job-owned directory on the compute node. Codex daemon launches
+also make the container root mount private in a child mount namespace before
+starting the process, allowing its bubblewrap sandbox to bind the rootfs.
+The VNC desktop and normal SSH container retain `/host`; the host-shell bridge
+uses the container SSH client when it runs inside the service instance.
+Projects under the separately bound `/scratch`, `/gpfs`, and home paths remain
+available to the app server, while `/host/...` paths are absent there.
 
 Initial OpenCodex startup allows up to 600 seconds for the first model and
 Codex state synchronization. The outer VNC launchers include this window before

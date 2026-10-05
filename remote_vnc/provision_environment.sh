@@ -248,7 +248,7 @@ rm -rf /var/lib/apt/lists/*
 ldconfig
 
 for required_command in \
-    fc-list fish gcc g++ gfortran git screen ssh node npm ocx codex uv pixi nvcc \
+    bwrap fc-list fish gcc g++ gfortran git screen ssh node npm ocx codex uv pixi nvcc \
     google-chrome-stable chatgpt matlab mpm vncserver xdotool xfce4-session; do
     command -v "${required_command}" >/dev/null 2>&1 || {
         printf 'Provisioned command is unavailable: %s\n' \

@@ -8,6 +8,7 @@ export TEST_SERVICE_COMMAND_LOG="${fixture_directory}/commands"
 container_home="${fixture_directory}/home"
 environment_home="${container_home}"
 release_directory="${fixture_directory}/release"
+codex_mount_namespace_helper="${release_directory}/codex_mount_namespace.sh"
 service_instance_name=fixture-instance
 service_instance_uri=instance://fixture-instance
 instance_exec_options=(exec --env BH_ENV_SERVICE_INSTANCE=fixture-instance)
@@ -23,6 +24,12 @@ cat > "${release_directory}/update_ai_tools.sh" <<'MOCK'
 printf 'update|%s|%s\n' "${BH_ENV_SERVICE_INSTANCE:-caller}" "$2" >> "${TEST_SERVICE_COMMAND_LOG}"
 MOCK
 chmod +x "${release_directory}/update_ai_tools.sh"
+cat > "${codex_mount_namespace_helper}" <<'MOCK'
+#!/usr/bin/env bash
+printf 'namespace\n' >> "${TEST_SERVICE_COMMAND_LOG}"
+exec "$@"
+MOCK
+chmod +x "${codex_mount_namespace_helper}"
 
 cat > "${apptainer_executable}" <<'MOCK'
 #!/usr/bin/env bash
@@ -59,6 +66,7 @@ grep -qx 'ocx-real|fixture-instance|status an argument; $(literal)' "${TEST_SERV
 : > "${TEST_SERVICE_COMMAND_LOG}"
 BH_ENV_ACTIVE=1 "${container_home}/.local/bin/codex" app-server daemon restart
 grep -qx 'codex-real|fixture-instance|app-server daemon restart' "${TEST_SERVICE_COMMAND_LOG}"
+grep -qx 'namespace' "${TEST_SERVICE_COMMAND_LOG}"
 : > "${TEST_SERVICE_COMMAND_LOG}"
 BH_ENV_ACTIVE=1 "${container_home}/.local/bin/codex" --version
 grep -qx 'codex-real|caller|--version' "${TEST_SERVICE_COMMAND_LOG}"

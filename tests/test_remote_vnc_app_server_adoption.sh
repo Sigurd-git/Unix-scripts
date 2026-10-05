@@ -33,9 +33,12 @@ done
 container_codex_home="${fixture_directory}"
 mkdir -p "${container_codex_home}/app-server-control"
 app_server_control_socket="${container_codex_home}/app-server-control/app-server-control.sock"
+container_app_server_control_socket="${app_server_control_socket}"
 ln -s "${fixture_directory}/live.sock" "${app_server_control_socket}"
 app_server_pid_file="${fixture_directory}/app-server.pid"
 app_server_updater_pid_file="${fixture_directory}/app-server-updater.pid"
+app_server_pid_files=("${app_server_pid_file}" "${fixture_directory}/daemon.pid")
+app_server_updater_pid_files=("${app_server_updater_pid_file}")
 app_server_restart_marker="${fixture_directory}/restart-marker"
 service_log_file="${fixture_directory}/service.log"
 printf '{"pid":999}\n' > "${app_server_pid_file}"

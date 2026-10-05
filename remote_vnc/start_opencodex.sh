@@ -33,12 +33,11 @@ opencodex_supervisor_stable_runtime_seconds=60
 opencodex_supervisor_probe_timeout_seconds=30
 opencodex_supervisor_readiness_refresh_seconds=30
 opencodex_supervisor_publish_timeout_seconds=60
-# XDG_RUNTIME_DIR and the container /tmp bind both come from this path, so it
-# has to resolve to the same location inside the instance. A node-local path
-# does not: only its tmp subdirectory is bound, and the services see a
-# runtime directory that is not there.
+# XDG_RUNTIME_DIR must resolve to the same path inside every instance session.
+# Its directory stays on shared storage; the separately bound /tmp is node-local.
 runtime_directory="${service_directory}/runtime"
 environment_common_helpers="${release_directory}/environment_common.sh"
+codex_mount_namespace_helper="${release_directory}/codex_mount_namespace.sh"
 container_codex_home="${container_home}/.codex"
 persistent_codex_home="${environment_home}/.codex"
 codex_seed_standalone_directory="/opt/codex-home/packages/standalone"
@@ -87,7 +86,8 @@ migration_status="NOT_STARTED"
 }
 for required_path in \
     "${environment_rootfs}" "${environment_home}" \
-    "${environment_common_helpers}" "${opencodex_supervisor_script}"; do
+    "${environment_common_helpers}" "${opencodex_supervisor_script}" \
+    "${codex_mount_namespace_helper}"; do
     [[ -e "${required_path}" ]] || {
         printf 'Required OpenCodex path is missing: %s\n' \
             "${required_path}" >&2
@@ -101,6 +101,11 @@ done
 [[ -x "${opencodex_supervisor_script}" ]] || {
     printf 'OpenCodex supervisor is not executable: %s\n' \
         "${opencodex_supervisor_script}" >&2
+    exit 2
+}
+[[ -x "${codex_mount_namespace_helper}" ]] || {
+    printf 'Codex mount namespace helper is not executable: %s\n' \
+        "${codex_mount_namespace_helper}" >&2
     exit 2
 }
 
@@ -126,9 +131,16 @@ touch "${service_log_file}" "${opencodex_log_file}" \
 chmod 600 "${service_log_file}" "${opencodex_log_file}" \
     "${opencodex_supervisor_log_file}"
 
+# A node-local /tmp avoids aliases of the separately mounted /scratch and GPFS
+# trees. A private parent keeps this job's app-server sockets out of other jobs.
+service_tmp_parent="$(mktemp -d "/tmp/remote-vnc-${current_user}-${job_id}.XXXXXX")"
+service_tmp_directory="${service_tmp_parent}/tmp"
+trap 'rm -rf -- "${service_tmp_parent}"' EXIT
+
 container_start_options=()
 bh_env_append_runtime_options \
-    container_start_options "${environment_home}" "${runtime_directory}" "" service
+    container_start_options "${environment_home}" "${runtime_directory}" "" \
+    service "${service_tmp_directory}"
 container_start_options+=(
     --env "OPENCODEX_HOME=${container_home}/.opencodex"
     --env "BH_ENV_NAME=${environment_name}"
@@ -185,8 +197,12 @@ process_cgroup_record() {
     fi
 }
 
+# Probe an optional socket in the container namespace. Codex may expose its
+# control socket through a link into the container's private /tmp, which the
+# host cannot follow even while the daemon is healthy.
 instance_process_belongs_to_job() {
     local process_id="$1"
+    local required_socket_path="${2:-}"
 
     [[ "${process_id}" =~ ^[0-9]+$ ]] || return 1
     timeout 10 "${apptainer_executable}" "${instance_exec_options[@]}" \
@@ -194,12 +210,14 @@ instance_process_belongs_to_job() {
         set -eu
         process_id="$1"
         expected_job_id="$2"
-        kill -0 "${process_id}" 2>/dev/null
-        [[ -r "/proc/${process_id}/cgroup" ]]
+        kill -0 "${process_id}" 2>/dev/null || exit 1
+        [[ -r "/proc/${process_id}/cgroup" ]] || exit 1
         process_cgroup="$(tr "\n" ";" < "/proc/${process_id}/cgroup")"
         [[ "${process_cgroup}" == \
-           *"/job_${expected_job_id}/step_batch/"* ]]
-    ' -- "${process_id}" "${job_id}" >/dev/null 2>&1
+           *"/job_${expected_job_id}/step_batch/"* ]] || exit 1
+        [[ -z "$3" || -S "$3" ]]
+    ' -- "${process_id}" "${job_id}" "${required_socket_path}" \
+        >/dev/null 2>&1
 }
 
 instance_process_cgroup_record() {
@@ -376,6 +394,7 @@ write_service_state() {
             "${service_instance_process_id}"
         printf 'CONTAINER_INSTANCE_CGROUP=%s\n' \
             "${service_instance_cgroup}"
+        printf 'SERVICE_TMP_DIRECTORY=%s\n' "${service_tmp_directory}"
         printf 'OPENCODEX_PID=%s\n' "${opencodex_process_id}"
         printf 'OPENCODEX_STATUS=%s\n' "${opencodex_status}"
         printf 'OPENCODEX_PORT=%s\n' "${opencodex_port}"
@@ -441,6 +460,7 @@ cleanup() {
         service_instance_started=false
     fi
     stop_owned_process "${service_instance_process_id}"
+    rm -rf -- "${service_tmp_parent}"
 
     if [[ ${exit_status} -eq 0 ]]; then
         app_server_status="STOPPED"
@@ -668,6 +688,10 @@ write_container_wrapper() {
             printf '        exec %q %q codex\n' \
                 "${release_directory}/update_ai_tools.sh" "${managed_codex_executable}"
             printf '    fi\n'
+            printf '    if [[ "${1:-} ${2:-}" == "app-server daemon" ]]; then\n'
+            printf '        exec %q %q "$@"\n' \
+                "${codex_mount_namespace_helper}" "${container_command}"
+            printf '    fi\n'
             printf '    exec %q "$@"\n' "${container_command}"
         fi
         printf 'fi\n'
@@ -701,7 +725,7 @@ write_container_wrapper "${environment_home}/.local/bin/ocx" \
 write_service_state "CHECKING_COMMANDS"
 run_in_container /bin/bash -c '
     set -Eeuo pipefail
-    for command_name in node npm ocx codex jq flock timeout; do
+    for command_name in node npm ocx codex jq flock timeout unshare mount bwrap; do
         command -v "${command_name}" >/dev/null
     done
     [[ "$(command -v codex)" == "$1" ]]
@@ -750,9 +774,20 @@ opencodex_process_cgroup="$(
 )"
 opencodex_status="running"
 
-app_server_pid_file="${persistent_codex_home}/app-server-daemon/app-server.pid"
-app_server_updater_pid_file="${persistent_codex_home}/app-server-daemon/app-server-updater.pid"
+app_server_pid_files=(
+    "${persistent_codex_home}/app-server-daemon/app-server.pid"
+    "${persistent_codex_home}/app-server-daemon/daemon.pid"
+)
+app_server_updater_pid_files=(
+    "${persistent_codex_home}/app-server-daemon/app-server-updater.pid"
+    "${persistent_codex_home}/app-server-daemon/daemon-updater.pid"
+)
 app_server_control_socket="${persistent_codex_home}/app-server-control/app-server-control.sock"
+container_app_server_control_socket="${container_codex_home}/app-server-control/app-server-control.sock"
+app_server_stderr_logs=(
+    "${persistent_codex_home}/app-server-daemon/app-server.stderr.log"
+    "${persistent_codex_home}/app-server-daemon/daemon.stderr.log"
+)
 app_server_startup_timeout_seconds=240
 
 app_server_socket_is_ready() {
@@ -763,13 +798,43 @@ app_server_socket_is_ready() {
 
 instance_codex_app_server_is_running() {
     local process_id="$1"
+    local required_socket_path="${2:-}"
 
-    instance_process_belongs_to_job "${process_id}" || return 1
+    instance_process_belongs_to_job "${process_id}" \
+        "${required_socket_path}" || return 1
     run_in_container /bin/bash -c '
         [[ -r "/proc/$1/cmdline" ]] || exit 1
         command_line="$(tr "\0" " " < "/proc/$1/cmdline")"
         [[ "${command_line}" == *" app-server "* ]]
     ' -- "${process_id}" >/dev/null 2>&1
+}
+
+print_app_server_stderr() {
+    local stderr_log
+
+    for stderr_log in "${app_server_stderr_logs[@]}"; do
+        [[ -s "${stderr_log}" ]] || continue
+        printf 'Codex app-server stderr: %s\n' "${stderr_log}" >&2
+        tail -n 40 "${stderr_log}" >&2
+    done
+}
+
+find_running_app_server() {
+    local pid_file candidate_process_id
+
+    app_server_process_id=""
+    for pid_file in "${app_server_pid_files[@]}"; do
+        [[ -s "${pid_file}" ]] || continue
+        candidate_process_id="$(
+            read_json_integer "$(head -n 1 "${pid_file}")" pid
+        )"
+        if instance_codex_app_server_is_running "${candidate_process_id}" \
+            "${container_app_server_control_socket}"; then
+            app_server_process_id="${candidate_process_id}"
+            return 0
+        fi
+    done
+    return 1
 }
 
 app_server_socket_owner_pid() {
@@ -791,15 +856,11 @@ app_server_socket_owner_pid() {
 
 start_codex_app_server() {
     local attempt_number stale_daemon_record updater_process_candidate
-    local recorded_process_id socket_owner_process_id
+    local app_server_updater_pid_file socket_owner_process_id
 
     # Another command may already have restored the daemon during the monitor's
     # grace period. Never remove a live job-owned daemon's control records.
-    recorded_process_id="$(
-        read_json_integer "$(head -n 1 "${app_server_pid_file}" 2>/dev/null || true)" pid
-    )"
-    if instance_codex_app_server_is_running "${recorded_process_id}"; then
-        app_server_process_id="${recorded_process_id}"
+    if find_running_app_server; then
         app_server_status="running"
         app_server_process_cgroup="$(
             instance_process_cgroup_record "${app_server_process_id}"
@@ -846,8 +907,8 @@ start_codex_app_server() {
     # A dead daemon leaves a socket and PID records in the persistent home.
     # Only clear these after checking that no server owns the socket.
     for stale_daemon_record in \
-        "${app_server_control_socket}" "${app_server_pid_file}" \
-        "${app_server_updater_pid_file}"; do
+        "${app_server_control_socket}" "${app_server_pid_files[@]}" \
+        "${app_server_updater_pid_files[@]}"; do
         [[ -e "${stale_daemon_record}" || -L "${stale_daemon_record}" ]] || continue
         printf '%s Removing stale app-server state: %s\n' \
             "$(date --iso-8601=seconds)" "${stale_daemon_record}" \
@@ -860,6 +921,7 @@ start_codex_app_server() {
         managed_codex="$1"
         restart_marker="$2"
         startup_timeout="$3"
+        mount_namespace_helper="$4"
         # The managed daemon detaches by design, so it cannot hold an apptainer
         # session open the way the OpenCodex supervisor does. Drop the fakeroot
         # preload for it: this instance already maps the user to root, while a
@@ -868,7 +930,8 @@ start_codex_app_server() {
         # the control socket.
         unset LD_PRELOAD FAKEROOTKEY FAKED_MODE FAKEROOTDONTTRYCHOWN
         if [[ ! -s "${CODEX_HOME}/app-server-daemon/settings.json" ]]; then
-            "${managed_codex}" app-server daemon bootstrap --remote-control
+            "${mount_namespace_helper}" "${managed_codex}" \
+                app-server daemon bootstrap --remote-control
         fi
         # The app server opens its SQLite state on shared storage before it
         # binds the control socket, and that first open can outlast the daemon
@@ -876,7 +939,8 @@ start_codex_app_server() {
         # failing the allocation: restart also retires a half-started server,
         # so the socket is not left reported as in use.
         restart_deadline=$((SECONDS + startup_timeout))
-        until "${managed_codex}" app-server daemon restart; do
+        until "${mount_namespace_helper}" "${managed_codex}" \
+            app-server daemon restart; do
             (( SECONDS < restart_deadline )) || exit 1
             sleep 5
         done
@@ -885,6 +949,7 @@ start_codex_app_server() {
         mv "${temporary_restart_marker}" "${restart_marker}"
     ' -- "${managed_codex_executable}" "${app_server_restart_marker}" \
         "${app_server_startup_timeout_seconds}" \
+        "${codex_mount_namespace_helper}" \
         >> "${service_log_file}" 2>&1 &
     app_server_launcher_process_id=$!
 
@@ -897,26 +962,24 @@ start_codex_app_server() {
             app_server_launcher_process_id=""
             break
         fi
-        if [[ -s "${app_server_restart_marker}" &&
-              -s "${app_server_pid_file}" ]] &&
-           app_server_socket_is_ready; then
-            app_server_process_id="$(
-                read_json_integer "$(head -n 1 "${app_server_pid_file}")" pid
-            )"
-            if instance_codex_app_server_is_running "${app_server_process_id}"; then
-                if [[ -s "${app_server_updater_pid_file}" ]]; then
-                    updater_process_candidate="$(
-                        read_json_integer \
-                            "$(head -n 1 "${app_server_updater_pid_file}")" pid
-                    )"
-                    if instance_process_belongs_to_job \
-                        "${updater_process_candidate}"; then
-                        app_server_updater_process_id="${updater_process_candidate}"
-                    fi
+        if [[ -s "${app_server_restart_marker}" ]] &&
+           find_running_app_server; then
+            app_server_updater_process_id=""
+            for app_server_updater_pid_file in \
+                "${app_server_updater_pid_files[@]}"; do
+                [[ -s "${app_server_updater_pid_file}" ]] || continue
+                updater_process_candidate="$(
+                    read_json_integer \
+                        "$(head -n 1 "${app_server_updater_pid_file}")" pid
+                )"
+                if instance_process_belongs_to_job \
+                    "${updater_process_candidate}"; then
+                    app_server_updater_process_id="${updater_process_candidate}"
+                    break
                 fi
-                app_server_status="running"
-                break
-            fi
+            done
+            app_server_status="running"
+            break
         fi
         sleep 1
     done
@@ -940,6 +1003,7 @@ start_codex_app_server() {
         fi
         printf 'Codex app server did not become ready inside Slurm Job %s. Log: %s\n' \
             "${job_id}" "${service_log_file}" >&2
+        print_app_server_stderr
         app_server_status="stopped"
         app_server_process_id=""
         return 1
@@ -1016,11 +1080,9 @@ while process_belongs_to_job "${service_instance_process_id}" &&
         opencodex_port=""
     fi
 
-    app_server_process_id="$(
-        read_json_integer "$(head -n 1 "${app_server_pid_file}" 2>/dev/null || true)" pid
-    )"
     app_server_status="stopped"
-    if instance_codex_app_server_is_running "${app_server_process_id}"; then
+    if instance_codex_app_server_is_running "${app_server_process_id}" ||
+       find_running_app_server; then
         app_server_status="running"
         app_server_missing_checks=0
         app_server_retry_delay_seconds=5

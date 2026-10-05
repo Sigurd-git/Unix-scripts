@@ -127,6 +127,7 @@ bh_env_append_runtime_options() {
     local runtime_directory="$3"
     local display_value="${4:-}"
     local access_mode="${5:-normal}"
+    local service_tmp_directory="${6:-}"
     local current_user
     local host_home
     local host_codex_home
@@ -178,9 +179,11 @@ bh_env_append_runtime_options() {
     runtime_options+=(
         --cleanenv
         --home "${persistent_home}:${container_home}"
-        --bind "/:/host:ro"
         --bind "${host_home}:/bluehive-home"
     )
+    # Codex's bubblewrap sandbox cannot reproduce a recursive host-root bind.
+    [[ "${access_mode}" == "service" ]] ||
+        runtime_options+=(--bind "/:/host:ro")
     # Keep proxy configuration and app-server sockets private to this
     # environment while using the BlueHive host as the canonical Codex session
     # store. Directory mounts preserve atomic session writes, and shared writer
@@ -221,7 +224,7 @@ bh_env_append_runtime_options() {
     done
     if [[ "${access_mode}" == "admin" ||
           "${access_mode}" == "service" ]]; then
-        container_tmp_directory="${runtime_directory}/tmp"
+        container_tmp_directory="${service_tmp_directory:-${runtime_directory}/tmp}"
         mkdir -p "${container_tmp_directory}"
         chmod 1777 "${container_tmp_directory}"
         runtime_options+=(

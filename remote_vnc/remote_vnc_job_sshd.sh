@@ -75,7 +75,7 @@ ssh-keygen -lf "${authorized_keys_file}" >/dev/null || {
 
 state_directory="${user_service_directory}/state"
 job_state_directory="${state_directory}/jobs/${SLURM_JOB_ID}"
-service_tmp_directory="${job_state_directory}/opencodex/runtime/tmp"
+service_state_file="${job_state_directory}/opencodex/service.env"
 vnc_connection_file="${state_directory}/connection.env"
 host_shell_directory="${job_state_directory}/host-shell"
 remote_ssh_directory="${job_state_directory}/remote-ssh"
@@ -363,7 +363,12 @@ if [[ "${environment_mode}" == "mutable" ]]; then
     bh_env_append_runtime_options \
         container_options "${environment_home}" "${runtime_directory}" \
         "${display_value}" normal
-    [[ -d "${service_tmp_directory}" ]] || {
+    service_tmp_directory="$(
+        read_state_value "${service_state_file}" SERVICE_TMP_DIRECTORY || true
+    )"
+    service_tmp_directory="${service_tmp_directory:-${job_state_directory}/opencodex/runtime/tmp}"
+    [[ "${service_tmp_directory}" == /* &&
+       -d "${service_tmp_directory}" ]] || {
         printf 'AI service runtime /tmp is unavailable: %s\n' \
             "${service_tmp_directory}" >&2
         exit 2

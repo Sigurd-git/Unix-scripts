@@ -414,7 +414,7 @@ if [[ "$(hostname -s)" == "${node_name}" ]]; then
             apptainer exec --cleanenv "${image_path}" /bin/bash -c '
                 set -eu
                 export PATH="/usr/local/cuda/bin:/opt/matlab/R2025b/bin:${PATH}"
-                for command_name in fish gcc g++ node npm ocx codex uv pixi nvcc \
+                for command_name in bwrap fish gcc g++ node npm ocx codex uv pixi nvcc \
                     google-chrome-stable \
                     chatgpt matlab mpm vncserver; do
                     command -v "${command_name}" >/dev/null

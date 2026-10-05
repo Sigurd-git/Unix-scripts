@@ -90,7 +90,7 @@ runtime_image_is_valid() {
     grep -Fq "\"any.accetto.version-sticker\": \"${expected_version_sticker}\"" \
         <<< "${labels}" || return 1
     apptainer exec "${requested_image}" /bin/sh -c \
-        'command -v vncserver >/dev/null && command -v vncpasswd >/dev/null && command -v xfce4-session >/dev/null' \
+        'command -v vncserver >/dev/null && command -v vncpasswd >/dev/null && command -v xfce4-session >/dev/null && command -v bwrap >/dev/null' \
         >/dev/null 2>&1
 }
 
@@ -192,7 +192,7 @@ rm -f -- "${temporary_image}" "${temporary_checksum_file}"
 printf '[remote-vnc] Building a private VNC image in Slurm Job %s.\n' \
     "${SLURM_JOB_ID:-unknown}" >&2
 timeout "${remaining_build_seconds}" \
-    apptainer build --force "${temporary_image}" "${definition_file}"
+    apptainer build --fakeroot --force "${temporary_image}" "${definition_file}"
 runtime_image_is_valid "${temporary_image}" || {
     printf 'Built VNC image failed its runtime checks.\n' >&2
     exit 5
