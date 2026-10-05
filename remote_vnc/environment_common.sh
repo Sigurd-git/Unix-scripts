@@ -139,6 +139,7 @@ bh_env_append_runtime_options() {
     local shared_codex_file
     local bind_path
     local slurm_variable_name
+    local host_gh_executable git_auth_config
     local -n runtime_options="${options_array_name}"
 
     current_user="$(id -un)"
@@ -184,6 +185,30 @@ bh_env_append_runtime_options() {
     # Codex's bubblewrap sandbox cannot reproduce a recursive host-root bind.
     [[ "${access_mode}" == "service" ]] ||
         runtime_options+=(--bind "/:/host:ro")
+    # Reuse the host's GitHub CLI authentication instead of a second login.
+    # The shared executable and config stay on the host; no token is copied.
+    host_gh_executable="$(command -v gh 2>/dev/null || true)"
+    if [[ -z "${host_gh_executable}" &&
+          -x "/scratch/${current_user}/envs/global/bin/gh" ]]; then
+        host_gh_executable="/scratch/${current_user}/envs/global/bin/gh"
+    fi
+    if [[ -n "${host_gh_executable}" &&
+          -f "${host_home}/.config/gh/hosts.yml" ]]; then
+        host_gh_executable="$(bh_env_map_host_path "${host_gh_executable}" "${host_home}")"
+        git_auth_config="${persistent_home}/.gitconfig-host-auth"
+        {
+            printf '[include]\n\tpath = %s/.gitconfig\n' "${container_home}"
+            printf '[include]\n\tpath = /bluehive-home/.gitconfig\n'
+            printf '[credential "https://github.com"]\n\thelper =\n'
+            printf '\thelper = !GH_CONFIG_DIR=/bluehive-home/.config/gh %s auth git-credential\n' \
+                "${host_gh_executable}"
+            printf '[credential "https://gist.github.com"]\n\thelper =\n'
+            printf '\thelper = !GH_CONFIG_DIR=/bluehive-home/.config/gh %s auth git-credential\n' \
+                "${host_gh_executable}"
+        } > "${git_auth_config}"
+        chmod 600 "${git_auth_config}"
+        runtime_options+=(--env "GIT_CONFIG_GLOBAL=${container_home}/.gitconfig-host-auth")
+    fi
     # Keep proxy configuration and app-server sockets private to this
     # environment while using the BlueHive host as the canonical Codex session
     # store. Directory mounts preserve atomic session writes, and shared writer

@@ -38,6 +38,12 @@ at least one Chinese-capable font and that MATLAB's splash library has no
 unresolved dependencies. A validated `current` symlink activates the generation.
 Existing environments remain mutable through `bh-env admin`.
 
+When the host has GitHub CLI authentication, container Git reuses the host's
+`gh` executable and `/bluehive-home/.config/gh` through a credential helper.
+The generated global configuration includes the existing container and host
+Git settings, then selects host authentication for GitHub and Gist. No second
+login or token copy is needed.
+
 `start_opencodex.sh` copies missing host OpenCodex/Codex settings, credentials,
 personal skills, plugins, memories, and imported skill sources into the private
 persistent container home on its first launch. It then creates a job-scoped
