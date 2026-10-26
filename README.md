@@ -71,6 +71,19 @@ can select these hosts and reuse the connection; clients with their own SSH
 implementation do not share OpenSSH control sockets. The script commands still
 connect with explicit options and do not require these aliases to exist.
 
+When the login node requires a jump host, add `ProxyJump <jump-host>` to its
+`Host bluehive3` (or full hostname) entry in `~/.ssh/config`. The login launcher
+imports only `ProxyJump` or `ProxyCommand` from that configuration, and alias
+synchronization preserves the route. Jump-host aliases use their normal SSH
+configuration. The launcher prints the selected route and limits the initial
+connection and SSH handshake to 15 seconds; password and Duo authentication
+remain interactive.
+
+Saved login passwords are supplied through OpenSSH's native askpass interface.
+This keeps the jump connection alive when the login master enters the background.
+Only the configured destination's password prompt receives the saved password;
+jump-host passwords, key passphrases, and additional Duo prompts remain manual.
+
 To refresh aliases for an already-running VNC job without restarting it:
 
 ```bash

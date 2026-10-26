@@ -247,3 +247,36 @@ if awk '
     exit 1
 fi
 printf 'PASS: a VNC state owned by another user does not create compute aliases\n'
+
+proxy_directory="${fixture_directory}/login-proxy"
+proxy_config="${proxy_directory}/config"
+mkdir -p "${proxy_directory}"
+cat > "${proxy_config}" <<'EOF'
+# BEGIN unix-scripts bluehive3
+Host bluehive3 bluehive3.circ.rochester.edu blh3
+    ProxyJump campus-gateway
+Host *
+# END unix-scripts bluehive3
+Host campus-gateway
+    HostName 192.0.2.10
+    User gateway_user
+EOF
+sync_cluster_ssh_config bluehive3 test_user "${proxy_config}" "${first_run_state}"
+assert_ssh_config_value "${proxy_config}" bluehive3 proxyjump campus-gateway
+assert_ssh_config_value "${proxy_config}" blh3 proxyjump campus-gateway
+assert_ssh_config_value "${proxy_config}" bluehive3 connecttimeout 15
+assert_ssh_config_value "${proxy_config}" bluehive3 connectionattempts 1
+assert_ssh_config_value "${proxy_config}" campus-gateway hostname 192.0.2.10
+cp "${proxy_config}" "${proxy_directory}/snapshot"
+sync_cluster_ssh_config bluehive3 test_user "${proxy_config}" "${first_run_state}"
+cmp "${proxy_config}" "${proxy_directory}/snapshot"
+printf 'PASS: a jump host inside the managed block survives repeated synchronization\n'
+
+cat > "${proxy_config}" <<'EOF'
+Host bluehive3.circ.rochester.edu
+    ProxyCommand ssh -W %h:%p campus-gateway
+EOF
+sync_cluster_ssh_config bluehive3 test_user "${proxy_config}" "${first_run_state}"
+assert_ssh_config_value "${proxy_config}" bluehive3 proxycommand \
+    'ssh -W %h:%p campus-gateway'
+printf 'PASS: a full-hostname proxy command is preserved in the login aliases\n'

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 # Export the explicit connection settings to ordinary OpenSSH clients. The
-# launchers still use -F /dev/null, so these aliases are not a prerequisite.
+# launchers import only optional proxy settings, so aliases are not required
+# for direct connections.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cluster_helpers.sh"
 
 ssh_config_state_value() {
@@ -28,7 +29,7 @@ sync_cluster_ssh_config() (
     local vnc_state_file="${4:-${HOME}/.ssh/remote_vnc_${cluster_name}.env}"
     local login_hostname login_control_path login_shortcut
     local compute_node="" compute_port compute_control_path identity_file
-    local known_hosts_file host_key_alias login_proxy_command state_value
+    local known_hosts_file host_key_alias login_proxy_command state_value login_proxy_config
     local temporary_config_file="" backup_file lock_acquired=false
     local symlink_target link_number attempt_number
     local block_begin="# BEGIN unix-scripts ${cluster_name}"
@@ -95,6 +96,11 @@ sync_cluster_ssh_config() (
           rmdir "${ssh_config_file}.unix-scripts-lock"' EXIT
     temporary_config_file="$(mktemp "${ssh_config_file}.unix-scripts.XXXXXX")"
 
+    # Preserve the route before replacing the managed block, including a
+    # ProxyJump that the user added inside that block.
+    login_proxy_config="$(cluster_login_proxy_config \
+        "${cluster_name}" "${remote_user_name}" "${ssh_config_file}")"
+
     {
         printf '%s\n' "${block_begin}"
         printf '# Updated by sync_ssh_config.sh; shares the launchers\047 SSH connections.\n'
@@ -103,7 +109,12 @@ sync_cluster_ssh_config() (
             "${login_hostname}" "${remote_user_name}"
         printf '    ControlMaster auto\n    ControlPersist no\n    ControlPath %s\n' \
             "$(ssh_config_quoted_path "${login_control_path}")"
-        printf '    ProxyCommand none\n'
+        printf '    ConnectTimeout 15\n    ConnectionAttempts 1\n'
+        if [[ -n "${login_proxy_config}" ]]; then
+            printf '    %s\n' "${login_proxy_config}"
+        else
+            printf '    ProxyCommand none\n'
+        fi
         if [[ -n "${compute_node}" ]]; then
             printf '\nHost %s %s\n' "$(cluster_compute_host "${cluster_name}")" \
                 "$(cluster_shortcut "${cluster_name}")"
