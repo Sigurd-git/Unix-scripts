@@ -156,6 +156,15 @@ The VNC job starts two SSH services:
 Both services inherit the VNC job's Slurm environment and batch cgroup. The
 container has its installed software, allocated GPU, `/gpfs/fs1`, `/gpfs/fs2`,
 `/scratch`, and SFTP. Run `bluehive-host-shell` for host programs and modules.
+It keeps the current directory when that path is available on the host, tries
+the corresponding host path for container mount aliases, and falls back to the
+host home only when neither directory is accessible.
+
+Containers bind the host's `~/.ssh` at their own `~/.ssh`, sharing SSH keys,
+configuration, and known hosts. GitHub HTTPS remotes use SSH for pushes inside
+the container; this rule leaves the stored remote URL and fetch URL unchanged.
+The private host-shell bridge keeps its own key and known hosts separately
+under `~/.local/state/remote-vnc/host-shell/$SLURM_JOB_ID/`.
 
 The sandbox maps the current user to root only inside the container when
 `bh-env admin` is running. It cannot change the host, read files the account

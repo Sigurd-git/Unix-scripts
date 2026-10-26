@@ -124,7 +124,20 @@ run only for a new allocation or an explicit update command, not on reconnect.
 For mutable environments, `remote_vnc_job_sshd.sh` starts the public SSH server
 inside the read-only sandbox. `blhc3` therefore opens Fish directly in the
 container, while SFTP, VNC forwarding, and OpenCodex forwarding use the same
-Slurm-bound connection. `bluehive-host-shell` returns to the allocation host.
+Slurm-bound connection. `bluehive-host-shell` returns to the allocation host,
+keeping the current absolute directory when accessible there. Otherwise it
+tries the host path corresponding to the container home, `/bluehive-home`, or
+`/host`, then falls back to the host home. This applies to interactive shells
+and one-shot commands.
+
+`environment_common.sh` binds the host's `~/.ssh` into normal, service, and
+admin containers so SSH uses the same keys, config, and known hosts. The private
+loopback bridge stores its key and known hosts under the persistent container
+home's `.local/state/remote-vnc/host-shell/$SLURM_JOB_ID/`, keeping its records
+separate from the host's SSH state. Container runtime variables and the SSH
+entry script set Git's `url.git@github.com:.pushInsteadOf=https://github.com/`
+rule so HTTPS GitHub remotes push with SSH without changing their stored URLs,
+fetch transport, or the user's Git configuration files.
 The SSH server uses a fixed `44000-44999` port derived from the remote username
 and stored in the local managed profile; it fails clearly if that port is
 occupied on the assigned node instead of silently selecting a different port.

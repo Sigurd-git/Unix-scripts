@@ -296,6 +296,11 @@ write_container_ssh_files() {
             "${host_home}/.local/bin/bh-env"
         printf 'export CODEX_HOME=%q\n' "${container_home}/.codex"
         printf 'export CODEX_SQLITE_HOME=%q\n' /bluehive-home/.codex
+        # sshd starts a fresh login environment, so repeat the runtime's
+        # GitHub push rule without editing the user's Git configuration.
+        printf 'export GIT_CONFIG_COUNT=1\n'
+        printf 'export GIT_CONFIG_KEY_0=%q\n' 'url.git@github.com:.pushInsteadOf'
+        printf 'export GIT_CONFIG_VALUE_0=%q\n' 'https://github.com/'
         printf 'export DISPLAY=%q\n' "${display_value}"
         printf 'export XAUTHORITY=%q\n' "${container_home}/.Xauthority"
         printf 'export XDG_CONFIG_HOME=%q\n' "${container_home}/.config"

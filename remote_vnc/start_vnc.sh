@@ -28,6 +28,8 @@ plain_password_file="${state_directory}/vnc-password.txt"
 vnc_log_file="${job_state_directory}/vncserver.log"
 vnc_process_id=""
 host_shell_directory="${job_state_directory}/host-shell"
+host_shell_client_directory="${session_home}/.local/state/remote-vnc/host-shell/${job_id}"
+container_host_shell_directory="${container_home}/.local/state/remote-vnc/host-shell/${job_id}"
 host_shell_log_file="${job_state_directory}/host-shell.log"
 host_shell_process_id=""
 gpu_log_file="${job_state_directory}/gpu-usage.csv"
@@ -264,6 +266,7 @@ apptainer_executable="$(command -v apptainer)"
 mkdir -p \
     "${job_state_directory}" \
     "${host_shell_directory}" \
+    "${host_shell_client_directory}" \
     "${session_home}/.config/tigervnc" \
     "${session_home}/.config/autostart" \
     "${session_home}/.config/xfce4" \
@@ -276,6 +279,7 @@ mkdir -p \
     "${session_home}/Desktop" \
     "${runtime_directory}/runtime"
 chmod 700 "${state_directory}" "${job_state_directory}" "${host_shell_directory}" \
+    "${host_shell_client_directory}" \
     "${session_home}" \
     "${session_home}/.config" "${session_home}/.config/tigervnc" \
     "${session_home}/.config/autostart" "${session_home}/.config/xfce4" \
@@ -306,8 +310,8 @@ vnc_config_directory="${session_home}/.config/tigervnc"
 vnc_config_file="${vnc_config_directory}/config"
 vnc_password_file="${vnc_config_directory}/passwd"
 host_shell_server_key="${host_shell_directory}/server-key"
-host_shell_client_key="${session_home}/.ssh/bluehive-host-shell"
-host_shell_known_hosts="${session_home}/.ssh/known_hosts"
+host_shell_client_key="${host_shell_client_directory}/client-key"
+host_shell_known_hosts="${host_shell_client_directory}/known_hosts"
 host_shell_entry_script="${host_shell_directory}/entry.sh"
 host_shell_rc_file="${host_shell_directory}/bashrc"
 bluehive_shell_client="${session_home}/.local/bin/bluehive-host-shell"
@@ -550,13 +554,47 @@ chmod 700 "${host_shell_entry_script}"
                 "${slurm_variable_name}" "${!slurm_variable_name}"
         fi
     done
-    printf 'cd "${HOME}"\n'
+    printf 'cd -- "${BH_ENV_HOST_WORKING_DIRECTORY:-${HOME}}" 2>/dev/null || cd -- "${HOME}"\n'
 } > "${host_shell_rc_file}"
 chmod 600 "${host_shell_rc_file}"
 
 {
     printf '#!/usr/bin/env bash\n'
     printf 'set -Eeuo pipefail\n'
+    printf 'host_home=%q\n' "${host_home}"
+    printf 'persistent_home=%q\n' "${session_home}"
+    printf 'container_home=%q\n' "${container_home}"
+    printf 'host_shell_rc_file=%q\n' "${host_shell_rc_file}"
+    cat <<'HOST_SHELL_CLIENT'
+host_working_directory="${PWD}"
+case "${PWD}" in
+    "${container_home}"|"${container_home}/"*)
+        mapped_working_directory="${persistent_home}${PWD#"${container_home}"}"
+        ;;
+    /bluehive-home|/bluehive-home/*)
+        mapped_working_directory="${host_home}${PWD#/bluehive-home}"
+        ;;
+    /host|/host/*)
+        mapped_working_directory="${PWD#/host}"
+        mapped_working_directory="${mapped_working_directory:-/}"
+        ;;
+    *)
+        mapped_working_directory="${PWD}"
+        ;;
+esac
+# Prefer the same absolute directory on the host. If only the container's
+# mount alias exists, try its corresponding host path before falling home.
+printf -v remote_command \
+    'if cd -- %q 2>/dev/null || cd -- %q 2>/dev/null; then export BH_ENV_HOST_WORKING_DIRECTORY="$PWD"; else cd -- %q; export BH_ENV_HOST_WORKING_DIRECTORY="$PWD"; fi; ' \
+    "${host_working_directory}" "${mapped_working_directory}" "${host_home}"
+if [[ $# -gt 0 ]]; then
+    remote_command+="$*"
+else
+    printf -v interactive_command 'exec /bin/bash --rcfile %q -i' \
+        "${host_shell_rc_file}"
+    remote_command+="${interactive_command}"
+fi
+HOST_SHELL_CLIENT
     printf 'ssh_tty_option=-T\n'
     printf 'if [[ -t 0 && -t 1 ]]; then\n'
     printf '    ssh_tty_option=-tt\n'
@@ -568,15 +606,16 @@ chmod 600 "${host_shell_rc_file}"
     printf '    ssh_command=(/usr/bin/ssh)\n'
     printf 'fi\n'
     printf 'exec "${ssh_command[@]}" "${ssh_tty_option}" \\\n'
-    printf '    -i %q \\\n' "${container_home}/.ssh/bluehive-host-shell"
+    printf '    -F /dev/null \\\n'
+    printf '    -i %q \\\n' "${container_host_shell_directory}/client-key"
     printf '    -p %q \\\n' "${host_shell_port}"
     printf '    -o BatchMode=yes \\\n'
     printf '    -o IdentitiesOnly=yes \\\n'
     printf '    -o StrictHostKeyChecking=yes \\\n'
-    printf '    -o UserKnownHostsFile=%q \\\n' "${container_home}/.ssh/known_hosts"
+    printf '    -o UserKnownHostsFile=%q \\\n' "${container_host_shell_directory}/known_hosts"
     printf '    -o GlobalKnownHostsFile=/dev/null \\\n'
     printf '    -o LogLevel=ERROR \\\n'
-    printf '    %q "$@"\n' "${current_user}@127.0.0.1"
+    printf '    %q "${remote_command}"\n' "${current_user}@127.0.0.1"
 } > "${bluehive_shell_client}"
 chmod 700 "${bluehive_shell_client}"
 

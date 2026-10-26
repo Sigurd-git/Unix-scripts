@@ -24,6 +24,7 @@ environment_generation=fixture
 current_user="$(id -un)"
 display_value=:41
 mkdir -p "${runtime_image_path}/etc" "${fixture_directory}/slurm" "${environment_home}/.local/bin" "${host_home}"
+ln -s "$(command -v git)" "${environment_home}/.local/bin/git"
 printf 'root:x:0:\ntty:x:5:\n' > "${runtime_image_path}/etc/group"
 cat > "${fixture_directory}/slurm/squeue" <<'MOCK'
 #!/usr/bin/env bash
@@ -42,11 +43,13 @@ export PATH='${fixture_directory}/slurm':\$PATH
 exec /bin/bash -c "\$1"
 MOCK
 chmod +x "${environment_home}/.local/bin/bluehive-host-shell"
-SSH_ORIGINAL_COMMAND='command -v squeue sq slab bh-host custom_tool; sq; slab; custom_tool' \
+SSH_ORIGINAL_COMMAND='command -v squeue sq slab bh-host custom_tool; sq; slab; custom_tool; git config --get url.git@github.com:.pushInsteadOf' \
     bash "${container_ssh_entry_host_file}" > "${fixture_directory}/output"
 grep -qx "${container_command_directory}/squeue" "${fixture_directory}/output"
 grep -qx "${container_command_directory}/sq" "${fixture_directory}/output"
 grep -qx 'SLURM fixture: --me' "${fixture_directory}/output"
 grep -qx custom "${fixture_directory}/output"
+grep -qx 'https://github.com/' "${fixture_directory}/output"
 [[ -f "${environment_home}/.config/fish/conf.d/remote-vnc-host-commands.fish" ]]
 printf 'PASS: generated SSH entry installs, discovers and executes Slurm and custom command wrappers\n'
+printf 'PASS: generated SSH entry restores the container GitHub SSH push rule\n'

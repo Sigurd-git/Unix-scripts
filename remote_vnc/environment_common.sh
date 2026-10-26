@@ -182,6 +182,13 @@ bh_env_append_runtime_options() {
         --home "${persistent_home}:${container_home}"
         --bind "${host_home}:/bluehive-home"
     )
+    # Use the host's SSH identities, configuration and known_hosts directly.
+    # The private loopback bridge keeps its keys outside this shared directory.
+    if [[ -d "${host_home}/.ssh" ]]; then
+        mkdir -p "${persistent_home}/.ssh"
+        chmod 700 "${persistent_home}/.ssh"
+        runtime_options+=(--bind "${host_home}/.ssh:${container_home}/.ssh")
+    fi
     # Codex's bubblewrap sandbox cannot reproduce a recursive host-root bind.
     [[ "${access_mode}" == "service" ]] ||
         runtime_options+=(--bind "/:/host:ro")
@@ -275,6 +282,9 @@ bh_env_append_runtime_options() {
         --env "BH_ENV_HOST_COMMAND=${host_home}/.local/bin/bh-env"
         --env "CODEX_HOME=${container_codex_home}"
         --env "CODEX_SQLITE_HOME=/bluehive-home/.codex"
+        --env "GIT_CONFIG_COUNT=1"
+        --env "GIT_CONFIG_KEY_0=url.git@github.com:.pushInsteadOf"
+        --env "GIT_CONFIG_VALUE_0=https://github.com/"
         --env "XDG_CONFIG_HOME=${container_home}/.config"
         --env "XDG_CACHE_HOME=${container_home}/.cache"
         --env "XDG_DATA_HOME=${container_home}/.local/share"
